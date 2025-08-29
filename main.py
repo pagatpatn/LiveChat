@@ -8,11 +8,12 @@ app = FastAPI()
 # Config from Railway Variables
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "kick-chat")
 NTFY_URL = f"https://ntfy.sh/{NTFY_TOPIC}"
-CHANNEL = os.getenv("KICK_CHANNEL", "xqc")
+CHANNEL = os.getenv("KICK_CHANNEL", "LastMove")
 
 async def poll_and_forward_chat(channel: str):
     """Continuously fetch chat for a channel if live and forward to ntfy"""
     last_message_id = None
+    was_live = False
 
     async with httpx.AsyncClient() as client:
         while True:
@@ -21,8 +22,18 @@ async def poll_and_forward_chat(channel: str):
                 r_info = await client.get(f"https://kick.com/api/v2/channels/{channel}")
                 if r_info.status_code == 200:
                     info = r_info.json()
-                    if not info.get("livestream"):  # channel not live
-                        print(f"{channel} is offline, retrying...")
+                    is_live = bool(info.get("livestream"))
+
+                    # Detect state changes
+                    if is_live and not was_live:
+                        print(f"✅ {channel} just went LIVE!")
+                        was_live = True
+                    elif not is_live and was_live:
+                        print(f"🛑 {channel} went OFFLINE.")
+                        was_live = False
+
+                    if not is_live:
+                        print(f"{channel} is offline, retrying in 10s...")
                         await asyncio.sleep(10)
                         continue
 
@@ -37,8 +48,8 @@ async def poll_and_forward_chat(channel: str):
                             username = msg["sender"]["username"]
                             text = msg["content"]
 
-                            # Format: Channel - Username: Message
-                            payload = f"{channel} - {username}: {text}"
+                            # Format: Username: Message
+                            payload = f"{username}: {text}"
 
                             # 3. Send to ntfy
                             try:
@@ -61,6 +72,7 @@ async def poll_and_forward_chat(channel: str):
 @app.on_event("startup")
 async def startup_event():
     """Start background polling for a channel"""
+    print(f"🚀 Starting Kick chat fetcher for channel: {CHANNEL}")
     asyncio.create_task(poll_and_forward_chat(CHANNEL))
 
 
