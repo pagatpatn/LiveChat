@@ -5,9 +5,10 @@ import os
 
 app = FastAPI()
 
-# Your ntfy topic (set this in Railway "Variables" as NTFY_TOPIC)
+# Config from Railway Variables
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "kick-chat")
 NTFY_URL = f"https://ntfy.sh/{NTFY_TOPIC}"
+CHANNEL = os.getenv("KICK_CHANNEL", "xqc")
 
 async def poll_and_forward_chat(channel: str):
     """Continuously fetch chat for a channel if live and forward to ntfy"""
@@ -36,15 +37,17 @@ async def poll_and_forward_chat(channel: str):
                             username = msg["sender"]["username"]
                             text = msg["content"]
 
+                            # Format: Channel - Username: Message
+                            payload = f"{channel} - {username}: {text}"
+
                             # 3. Send to ntfy
-                            payload = f"[{username}] {text}"
                             try:
                                 await client.post(NTFY_URL, data=payload.encode("utf-8"))
                                 print("Sent:", payload)
                             except Exception as e:
                                 print("Error sending to ntfy:", e)
 
-                            # 4. Wait 5s before next send
+                            # 4. Wait 5s before sending next message
                             await asyncio.sleep(5)
 
                             last_message_id = msg["id"]
@@ -58,8 +61,7 @@ async def poll_and_forward_chat(channel: str):
 @app.on_event("startup")
 async def startup_event():
     """Start background polling for a channel"""
-    channel = os.getenv("KICK_CHANNEL", "xqc")  # set default or use Railway variable
-    asyncio.create_task(poll_and_forward_chat(channel))
+    asyncio.create_task(poll_and_forward_chat(CHANNEL))
 
 
 @app.get("/healthz")
