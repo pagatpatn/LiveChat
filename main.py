@@ -1,94 +1,81 @@
-from fastapi import FastAPI
-import httpx
-import asyncio
 import os
-from datetime import datetime
+import asyncio
+import httpx
+from fastapi import FastAPI
 
 app = FastAPI()
 
-# Config
-NTFY_TOPIC = os.getenv("NTFY_TOPIC", "kick-chat")
-NTFY_URL = f"https://ntfy.sh/{NTFY_TOPIC}"
-CHANNEL = os.getenv("KICK_CHANNEL", "LastMove")
+# Hardcode channel
+CHANNEL = "LastMove"  
+
+# Ntfy config
+NTFY_URL = "https://ntfy.sh/kick-chat"  # change if needed
 
 async def send_to_ntfy(client, message: str):
-    """Send logs/messages to ntfy + console"""
-    print(message)  # Always log to Railway too
+    """Send message to ntfy and also print to console"""
+    print(message)
     try:
         await client.post(NTFY_URL, data=message.encode("utf-8"))
     except Exception as e:
         print("❌ Failed to send to ntfy:", e)
 
 async def poll_and_forward_chat(channel: str):
-    last_message_id = None
-    was_live = False
-
+    """Poll Kick API for channel livestream + chats"""
     async with httpx.AsyncClient() as client:
-        # Get chatroom id once
-        channel_info = await client.get(f"https://kick.com/api/v2/channels/{channel}")
-        if channel_info.status_code != 200:
-            await send_to_ntfy(client, f"❌ Could not fetch channel info for {channel}")
-            return
+        await send_to_ntfy(client, f"🚀 Kick chat fetcher started for channel: {channel}")
 
-        chatroom_id = channel_info.json().get("chatroom", {}).get("id")
-        if not chatroom_id:
-            await send_to_ntfy(client, f"❌ No chatroom found for {channel}")
-            return
-
-        await send_to_ntfy(client, f"🎯 Using chatroom ID {chatroom_id} for {channel}")
+        last_message_ids = set()
 
         while True:
             try:
-                # 1. Check if live
-                live_resp = await client.get(f"https://kick.com/api/v2/channels/{channel}/livestream")
-                is_live = (live_resp.status_code == 200 and live_resp.json())
-
-                if is_live and not was_live:
-                    msg = f"✅ {channel} is now LIVE! ({datetime.now().strftime('%H:%M:%S')})"
-                    await send_to_ntfy(client, msg)
-                    was_live = True
-                elif not is_live and was_live:
-                    msg = f"🛑 {channel} went OFFLINE. ({datetime.now().strftime('%H:%M:%S')})"
-                    await send_to_ntfy(client, msg)
-                    was_live = False
-
-                if not is_live:
-                    await send_to_ntfy(client, f"{channel} is offline, retrying in 10s...")
+                # Fetch channel info
+                resp = await client.get(f"https://kick.com/api/v2/channels/{channel}")
+                if resp.status_code != 200:
+                    await send_to_ntfy(client, f"❌ Channel fetch failed [{resp.status_code}]: {resp.text[:200]}")
                     await asyncio.sleep(10)
                     continue
 
-                # 2. Fetch chat messages
-                chat_resp = await client.get(f"https://kick.com/api/v2/chatrooms/{chatroom_id}/messages")
-                if chat_resp.status_code == 200:
-                    data = chat_resp.json()
-                    messages = data.get("messages", [])
+                info = resp.json()
 
-                    for msg in messages:
-                        if last_message_id is None or msg["id"] > last_message_id:
-                            username = msg["sender"]["username"]
-                            text = msg["content"]
-                            payload = f"{username}: {text}"
+                # Check livestream
+                if not info.get("livestream"):
+                    await send_to_ntfy(client, f"📡 {channel} is offline, retrying in 10s...")
+                    await asyncio.sleep(10)
+                    continue
 
-                            await send_to_ntfy(client, "💬 " + payload)
+                livestream = info["livestream"]
+                chatroom_id = livestream["chatroom"]["id"]
 
-                            last_message_id = msg["id"]
+                # Poll chat messages
+                chat_resp = await client.get(
+                    f"https://kick.com/api/v2/chatrooms/{chatroom_id}/messages"
+                )
+                if chat_resp.status_code != 200:
+                    await send_to_ntfy(client, f"❌ Chat fetch failed [{chat_resp.status_code}]: {chat_resp.text[:200]}")
+                    await asyncio.sleep(5)
+                    continue
 
-                            await asyncio.sleep(5)  # spam delay
+                chats = chat_resp.json().get("messages", [])
+                for chat in chats:
+                    msg_id = chat.get("id")
+                    if msg_id in last_message_ids:
+                        continue
+                    last_message_ids.add(msg_id)
+
+                    username = chat.get("sender", {}).get("username", "Unknown")
+                    text = chat.get("content", "")
+                    formatted = f"{username}: {text}"
+                    await send_to_ntfy(client, formatted)
+
+                    await asyncio.sleep(5)  # spam-proof delay
 
             except Exception as e:
-                await send_to_ntfy(client, f"⚠️ Error fetching: {e}")
-
-            await asyncio.sleep(5)
-
+                await send_to_ntfy(client, f"❌ Error: {e}")
+                await asyncio.sleep(10)
 
 @app.on_event("startup")
 async def startup_event():
-    boot_msg = f"🚀 Starting Kick chat fetcher for channel: {CHANNEL}"
-    print(boot_msg)
-    async with httpx.AsyncClient() as client:
-        await send_to_ntfy(client, boot_msg)
     asyncio.create_task(poll_and_forward_chat(CHANNEL))
-
 
 @app.get("/healthz")
 async def healthz():
