@@ -1,55 +1,45 @@
-import asyncio
+import os
 import json
+import asyncio
 import websockets
-import logging
-import aiohttp
+import requests
+from datetime import datetime
 
-# --- Configuration ---
-CHANNEL_NAME = "lastmove"       # Kick channel name
-KICK_USERNAME = "lastmove"   # Any nickname for IRC connection
-NTFY_TOPIC = "streamchats123"       # Your ntfy topic
-DELAY = 5                       # Delay between messages for spam proof
+# --- Environment Variables ---
+KICK_CHANNEL = os.getenv("KICK_CHANNEL", "your_channel_name")
+NTFY_TOPIC = os.getenv("NTFY_TOPIC", "chat-notifier")
 
-logging.basicConfig(level=logging.INFO, format="%(message)s")
+# --- Fetch WebSocket URL ---
+def get_websocket_url(channel):
+    url = f"https://kick.com/api/v2/channels/{channel}/chatroom"
+    response = requests.get(url)
+    data = response.json()
+    return data["chatroom"]["websocket_url"]
 
-# --- Send message to NTFY ---
-async def send_ntfy(user: str, message: str):
-    async with aiohttp.ClientSession() as session:
-        await session.post(f"https://ntfy.sh/{NTFY_TOPIC}", data=f"{user}: {message}".encode("utf-8"))
-    await asyncio.sleep(DELAY)
+# --- Send Notifications ---
+def send_ntfy(platform, user, msg):
+    payload = {
+        "topic": NTFY_TOPIC,
+        "message": f"[{platform}] {user}: {msg}",
+        "priority": 1,
+        "tags": ["chat"]
+    }
+    requests.post("https://ntfy.sh", json=payload)
 
-# --- Connect to Kick WebSocket ---
-async def connect_kick():
-    while True:
-        try:
-            ws_url = "wss://irc-ws.chat.kick.com/"
-            async with websockets.connect(ws_url) as ws:
-                logging.info(f"✅ Connected to Kick chat for {CHANNEL_NAME}")
+# --- WebSocket Listener ---
+async def listen_chat():
+    ws_url = get_websocket_url(KICK_CHANNEL)
+    async with websockets.connect(ws_url) as ws:
+        print(f"Connected to Kick chat: {KICK_CHANNEL}")
+        while True:
+            message = await ws.recv()
+            data = json.loads(message)
+            if data.get("type") == "chat":
+                user = data["data"]["user"]["username"]
+                msg = data["data"]["message"]
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] {user}: {msg}")
+                send_ntfy("Kick", user, msg)
 
-                # IRC-style commands
-                await ws.send(f"NICK {KICK_USERNAME}")
-                await ws.send(f"JOIN #{CHANNEL_NAME}")
-
-                async for raw_msg in ws:
-                    try:
-                        lines = raw_msg.split("\r\n")
-                        for line in lines:
-                            if "PRIVMSG" in line:
-                                # IRC message parsing
-                                parts = line.split(":", 2)
-                                if len(parts) >= 3:
-                                    user = parts[1].split("!")[0]
-                                    msg = parts[2]
-                                    formatted = f"{user}: {msg}"
-                                    logging.info(f"💬 {formatted}")
-                                    await send_ntfy(user, msg)
-                    except Exception as e:
-                        logging.error(f"⚠️ Failed to parse message: {e}")
-
-        except Exception as e:
-            logging.error(f"❌ Disconnected or error, retrying in 5s... {e}")
-            await asyncio.sleep(5)
-
-# --- Main ---
+# --- Run the Listener ---
 if __name__ == "__main__":
-    asyncio.run(connect_kick())
+    asyncio.run(listen_chat())
