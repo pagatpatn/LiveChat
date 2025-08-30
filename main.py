@@ -1,16 +1,16 @@
 import os
 import time
+import threading
 import re
-import requests
 from datetime import datetime, timedelta
 from kickapi import KickAPI
-import threading
+import requests
 
 # --- Config ---
-KICK_CHANNEL = os.getenv("KICK_CHANNEL", "default_channel")
-NTFY_TOPIC = os.getenv("NTFY_TOPIC", "kick-chat-notifications")
-POLL_INTERVAL = 5  # Polling every 5 seconds
+KICK_CHANNEL = os.getenv("KICK_CHANNEL", "default_channel")  # Default channel, set from env variable
+POLL_INTERVAL = 1  # Polling every 1 second for real-time chat capture
 TIME_WINDOW_MINUTES = 10  # Time window for fetching messages
+NTFY_API_URL = "https://ntfy.sh/streamchats123"  # Replace with your NTFY topic URL
 
 if not KICK_CHANNEL:
     raise ValueError("Please set KICK_CHANNEL environment variable")
@@ -26,14 +26,6 @@ EMOJI_MAP = {
 # Emoji regex pattern
 emoji_pattern = r"\[emote:(\d+):([^\]]+)\]"
 
-def send_ntfy(user, msg):
-    """Send chat message notifications."""
-    try:
-        requests.post(f"https://ntfy.sh/{NTFY_TOPIC}", data=f"{user}: {msg}".encode("utf-8"))
-        time.sleep(POLL_INTERVAL)
-    except Exception as e:
-        print("⚠️ Failed to send NTFY:", e)
-
 def extract_emoji(text):
     """Extract and replace emojis from the text."""
     matches = re.findall(emoji_pattern, text)
@@ -45,6 +37,26 @@ def extract_emoji(text):
             emoji = EMOJI_MAP.get(emote_name, f"[{emote_name}]")  # Default to text if not found
             text = text.replace(f"[emote:{emote_id}:{emote_name}]", emoji)
     return text
+
+def send_ntfy_notification(message):
+    """Send chat message to NTFY with a 5 second delay."""
+    time.sleep(5)  # Delay for 5 seconds before sending notification
+    
+    # Prepare the payload to send to NTFY
+    payload = {
+        'title': f"New message from {message['username']}",
+        'message': message['text'],
+    }
+    
+    try:
+        # Send message to NTFY
+        response = requests.post(NTFY_API_URL, json=payload)
+        if response.status_code == 200:
+            print(f"✅ Sent to NTFY: {message['username']}: {message['text']}")
+        else:
+            print(f"❌ Failed to send to NTFY. Status Code: {response.status_code}")
+    except Exception as e:
+        print(f"❌ Error sending to NTFY: {e}")
 
 def get_latest_message():
     """Get the latest live chat message for a channel."""
@@ -91,14 +103,15 @@ def listen_live_chat():
         message_id = f"{latest_message['username']}:{latest_message['text']}"
         
         if message_id != last_fetched_message_id:
-            print(f"{latest_message['username']}: {latest_message['text']}")
+            # Print the message to console immediately (real-time)
+            print(f"[{latest_message['timestamp']}] {latest_message['username']}: {latest_message['text']}")
             
-            # Wait for 5 seconds before sending the message to NTFY
-            time.sleep(5)
-            send_ntfy(latest_message['username'], latest_message['text'])
+            # Send the message to NTFY with 5 seconds delay in a separate thread
+            threading.Thread(target=send_ntfy_notification, args=(latest_message,)).start()
+            
             last_fetched_message_id = message_id  # Update the last fetched message ID
         
-        time.sleep(POLL_INTERVAL)  # Poll every 5 seconds
+        time.sleep(POLL_INTERVAL)  # Poll every 1 second for new messages
 
 def start_listener():
     """Start the live chat listener in a background thread."""
@@ -109,7 +122,7 @@ def start_listener():
 if __name__ == "__main__":
     start_listener()
     print("Listener started. Running in the background...")
-    
+
     # Keep the main process alive, allowing the background thread to continue running.
     try:
         while True:
