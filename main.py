@@ -1,46 +1,67 @@
 import os
 import json
 import asyncio
-import websockets
 import requests
+import websockets
 from datetime import datetime
 
-# --- Environment Variables ---
-KICK_CHANNEL = os.getenv("KICK_CHANNEL", "LastMove")
-NTFY_TOPIC = os.getenv("NTFY_TOPIC", "chat-notifier")
+# --- Configuration ---
+KICK_CHANNEL = os.getenv("KICK_CHANNEL", "lastmove")
+NTFY_TOPIC = os.getenv("NTFY_TOPIC", "kick-chats")
+DELAY = 5  # delay between NTFY messages for spam-proof
 
-# --- Fetch WebSocket URL ---
+# --- Send message to NTFY ---
+def send_ntfy(user: str, message: str):
+    try:
+        requests.post(
+            f"https://ntfy.sh/{NTFY_TOPIC}",
+            data=f"{user}: {message}".encode("utf-8")
+        )
+    except Exception as e:
+        print("⚠️ Failed to send NTFY:", e)
+
+# --- Fetch WebSocket URL with safe parsing ---
 def get_websocket_url(channel):
     url = f"https://kick.com/api/v2/channels/{channel}/chatroom"
-    response = requests.get(url)
-    data = response.json()
-    return data["chatroom"]["websocket_url"]
+    try:
+        r = requests.get(url, timeout=10)
+        data = r.json()
+        if "chatroom" not in data:
+            print("❌ Kick returned no chatroom info:", data)
+            return None
+        return data["chatroom"].get("websocket_url")
+    except Exception as e:
+        print("❌ Failed to fetch WebSocket URL:", e)
+        return None
 
-# --- Send Notifications ---
-def send_ntfy(platform, user, msg):
-    payload = {
-        "topic": NTFY_TOPIC,
-        "message": f"[{platform}] {user}: {msg}",
-        "priority": 1,
-        "tags": ["chat"]
-    }
-    requests.post("https://ntfy.sh", json=payload)
-
-# --- WebSocket Listener ---
+# --- Listen to Kick chat ---
 async def listen_chat():
-    ws_url = get_websocket_url(KICK_CHANNEL)
-    async with websockets.connect(ws_url) as ws:
-        print(f"Connected to Kick chat: {KICK_CHANNEL}")
-        while True:
-            message = await ws.recv()
-            data = json.loads(message)
-            if data.get("type") == "chat":
-                user = data["data"]["user"]["username"]
-                msg = data["data"]["message"]
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] {user}: {msg}")
-                send_ntfy("Kick", user, msg)
+    while True:
+        ws_url = get_websocket_url(KICK_CHANNEL)
+        if not ws_url:
+            print(f"⏳ Could not get WebSocket URL for {KICK_CHANNEL}, retrying in 10s...")
+            await asyncio.sleep(10)
+            continue
 
-# --- Run the Listener ---
+        try:
+            async with websockets.connect(ws_url) as ws:
+                print(f"✅ Connected to Kick chat: {KICK_CHANNEL}")
+                async for message in ws:
+                    try:
+                        data = json.loads(message)
+                        if data.get("type") == "chat":
+                            user = data["data"]["user"]["username"]
+                            msg = data["data"]["message"]
+                            timestamp = datetime.now().strftime("%H:%M:%S")
+                            print(f"[{timestamp}] {user}: {msg}")
+                            send_ntfy(user, msg)
+                    except Exception as e:
+                        print("⚠️ Failed to parse chat message:", e)
+        except Exception as e:
+            print("❌ Connection error, retrying in 5s...", e)
+            await asyncio.sleep(5)
+
+# --- Main ---
 if __name__ == "__main__":
+    print(f"🚀 Starting Kick chat fetcher for channel: {KICK_CHANNEL}")
     asyncio.run(listen_chat())
-
