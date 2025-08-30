@@ -1,7 +1,2 @@
-kickpython
-websockets
+KickApi
 requests
-aiohttp
-curl_cffi
-
-
