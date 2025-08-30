@@ -46,7 +46,8 @@ def send_ntfy(user, msg):
         
         # Handle response and check for success
         if response.status_code == 200:
-            print(f"Notification sent: {formatted_msg}")
+            # Only log if successfully sent
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] {formatted_msg}")  # Log only the message sent to NTFY
         else:
             print(f"Failed to send NTFY message, Status Code: {response.status_code}")
     except Exception as e:
@@ -103,7 +104,7 @@ def listen_live_chat():
             if msg_id not in last_fetched_messages:
                 # Check if we should send to NTFY
                 if time.time() - last_sent_time >= 5:
-                    # Log only the messages we are sending
+                    # Log the message we are sending, without redundant logs like "Notification Sent"
                     print(f"[{msg['timestamp']}] {msg['username']}: {msg['text']}")
                     send_ntfy(msg['username'], msg['text'])  # Send message to NTFY
                     last_fetched_messages.add(msg_id)  # Add message to set to prevent re-sending
