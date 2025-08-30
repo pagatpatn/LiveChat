@@ -1,3 +1,5 @@
 kickpython
+websockets
 requests
 aiohttp
+
