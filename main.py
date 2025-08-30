@@ -42,7 +42,13 @@ def send_ntfy(user, msg):
         formatted_msg = f"{user}: {msg}"
         
         # Send the notification without revealing the URL (we are only passing the message)
-        requests.post(f"https://ntfy.sh/{NTFY_TOPIC}", data=formatted_msg.encode("utf-8"))
+        response = requests.post(f"https://ntfy.sh/{NTFY_TOPIC}", data=formatted_msg.encode("utf-8"))
+        
+        # Handle response and check for success
+        if response.status_code == 200:
+            print(f"Notification sent: {formatted_msg}")
+        else:
+            print(f"Failed to send NTFY message, Status Code: {response.status_code}")
     except Exception as e:
         print("⚠️ Failed to send NTFY:", e)
 
