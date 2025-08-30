@@ -4,70 +4,62 @@ import requests
 from kickapi import KickAPI
 from datetime import datetime, timedelta
 
-# --- Config from Railway environment variables ---
-KICK_CHANNEL = os.getenv("KICK_CHANNEL")  # e.g., "LastMove"
+# --- Config ---
+KICK_CHANNEL = os.getenv("KICK_CHANNEL")
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "kick-chats")
-NTFY_DELAY = 5  # seconds between messages
+NTFY_DELAY = 5
 
 if not KICK_CHANNEL:
-    raise ValueError("❌ Please set the KICK_CHANNEL environment variable on Railway")
+    raise ValueError("Please set KICK_CHANNEL environment variable")
 
-# --- Send message to NTFY ---
 def send_ntfy(user: str, message: str):
     try:
-        requests.post(
-            f"https://ntfy.sh/{NTFY_TOPIC}",
-            data=f"{user}: {message}".encode("utf-8")
-        )
+        requests.post(f"https://ntfy.sh/{NTFY_TOPIC}", data=f"{user}: {message}".encode("utf-8"))
         time.sleep(NTFY_DELAY)
     except Exception as e:
-        print("⚠️ Failed to send NTFY:", e)
+        print("NTFY error:", e)
 
-# --- Kick chat listener ---
 def kick_listener():
     api = KickAPI()
     print(f"🚀 Starting Kick chat listener for channel: {KICK_CHANNEL}")
 
-    last_timestamp = None  # Track last message time for polling
-
     while True:
         try:
-            # Fetch channel info
             channel = api.channel(KICK_CHANNEL)
             if not channel:
-                print(f"❌ Channel '{KICK_CHANNEL}' not found, retrying in 10s...")
+                print(f"❌ Channel '{KICK_CHANNEL}' not found, retrying...")
                 time.sleep(10)
                 continue
 
-            # Check if channel is live
-            if not channel.live or not channel.live.stream:
-                print(f"⏳ Channel is not live, retrying in 10s...")
+            # Find the live video (status == "live")
+            live_video = None
+            for video in channel.videos:
+                if getattr(video, "status", "") == "live":
+                    live_video = video
+                    break
+
+            if not live_video:
+                print(f"⏳ No live video, retrying in 10s...")
                 time.sleep(10)
                 continue
 
-            live_video = channel.live
-            print(f"✅ Found live video: {live_video.title}")
+            print(f"✅ Live video found: {live_video.title}")
 
-            # Convert start time for KickApi chat fetching
-            original_date_obj = datetime.strptime(live_video.start_time, '%Y-%m-%d %H:%M:%S')
-            formatted_date_str = original_date_obj.strftime('%Y-%m-%dT%H:%M:%S.000Z')
+            # Start fetching chat
+            start_time = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            chat = api.chat(channel.id, start_time)
 
-            # Fetch chat
-            chat = api.chat(channel.id, formatted_date_str)
             for message in chat.messages:
                 user = message.sender.username
                 text = message.text
                 print(f"{user}: {text}")
                 send_ntfy(user, text)
 
-            # Update start_time for next iteration
-            live_video.start_time = (original_date_obj + timedelta(seconds=5)).strftime('%Y-%m-%d %H:%M:%S')
             time.sleep(5)
 
         except Exception as e:
             print("❌ Error in Kick listener:", e)
             time.sleep(10)
 
-# --- Run ---
 if __name__ == "__main__":
     kick_listener()
