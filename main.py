@@ -4,12 +4,13 @@ import re
 import requests
 from datetime import datetime, timedelta
 from kickapi import KickAPI
+import threading
 
 # --- Config ---
 KICK_CHANNEL = os.getenv("KICK_CHANNEL", "default_channel")
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "kick-chat-notifications")
-POLL_INTERVAL = 5  # Reduced polling interval to 5 seconds
-TIME_WINDOW_MINUTES = 10  # Increased time window to 10 minutes
+POLL_INTERVAL = 3  # Polling every 5 seconds
+TIME_WINDOW_MINUTES = 5  # Time window for fetching messages
 
 if not KICK_CHANNEL:
     raise ValueError("Please set KICK_CHANNEL environment variable")
@@ -37,8 +38,8 @@ def extract_emoji(text):
             text = text.replace(f"[emote:{emote_id}:{emote_name}]", f"🎉 {emote_name}")  # Example of emoji handling
     return text
 
-def get_live_chat():
-    """Get live chat messages for a channel."""
+def get_latest_message():
+    """Get the latest live chat message for a channel."""
     try:
         channel = kick_api.channel(KICK_CHANNEL)
         
@@ -51,42 +52,56 @@ def get_live_chat():
         formatted_time = past_time.strftime('%Y-%m-%dT%H:%M:%S.000Z')
 
         chat = kick_api.chat(channel.id, formatted_time)
-        messages = []
         
         if chat and hasattr(chat, 'messages') and chat.messages:
-            for msg in chat.messages:
-                messages.append({
-                    'username': msg.sender.username if hasattr(msg, 'sender') else 'Unknown',
-                    'text': extract_emoji(msg.text) if hasattr(msg, 'text') else 'No text',
-                    'timestamp': datetime.now().strftime('%H:%M:%S'),
-                    'channel': channel.username
-                })
+            # Only return the latest message
+            latest_message = chat.messages[-1]
+            return {
+                'username': latest_message.sender.username if hasattr(latest_message, 'sender') else 'Unknown',
+                'text': extract_emoji(latest_message.text) if hasattr(latest_message, 'text') else 'No text',
+                'timestamp': datetime.now().strftime('%H:%M:%S'),
+                'channel': channel.username
+            }
         
-        return messages
+        return None
     except Exception as e:
         print(f"❌ Error fetching live chat: {e}")
         return None
 
 def listen_live_chat():
     """Fetch and listen to live chat for a Kick video."""
-    last_fetched_messages = set()  # Store messages we have already sent
+    last_fetched_message_id = None  # Track the last message ID to avoid duplicates
 
     while True:
-        messages = get_live_chat()
+        latest_message = get_latest_message()
         
-        if not messages:
+        if latest_message is None:
             time.sleep(POLL_INTERVAL)  # No new messages, retrying after the interval
             continue
 
-        for msg in messages:
-            msg_id = f"{msg['username']}:{msg['text']}"  # Unique message identifier
-            
-            if msg_id not in last_fetched_messages:
-                print(f"{msg['username']}: {msg['text']}")
-                send_ntfy(msg['username'], msg['text'])
-                last_fetched_messages.add(msg_id)
-
+        # Check if the message is new (based on message content and timestamp)
+        message_id = f"{latest_message['username']}:{latest_message['text']}"
+        
+        if message_id != last_fetched_message_id:
+            print(f"{latest_message['username']}: {latest_message['text']}")
+            send_ntfy(latest_message['username'], latest_message['text'])
+            last_fetched_message_id = message_id  # Update the last fetched message ID
+        
         time.sleep(POLL_INTERVAL)  # Poll every 5 seconds
 
+def start_listener():
+    """Start the live chat listener in a background thread."""
+    listener_thread = threading.Thread(target=listen_live_chat)
+    listener_thread.daemon = True  # Allows thread to exit when the main program exits
+    listener_thread.start()
+
 if __name__ == "__main__":
-    listen_live_chat()
+    start_listener()
+    print("Listener started. Running in the background...")
+    
+    # Keep the main process alive, allowing the background thread to continue running.
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("Exiting due to user interrupt.")
