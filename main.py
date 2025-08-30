@@ -9,7 +9,7 @@ import requests
 # --- Config ---
 KICK_CHANNEL = os.getenv("KICK_CHANNEL", "default_channel")  # Default channel, set from env variable
 POLL_INTERVAL = 0.5  # Polling every 0.5 second for real-time chat capture
-TIME_WINDOW_MINUTES = 0.6  # Time window for fetching messages
+TIME_WINDOW_MINUTES = 0.3  # Time window for fetching messages (2 minutes)
 NTFY_API_URL = "https://ntfy.sh/streamchats123"  # Replace with your NTFY topic URL
 
 if not KICK_CHANNEL:
@@ -44,14 +44,14 @@ def send_ntfy_notification(message):
     # Prepare the payload to send to NTFY
     payload = {
         'title': f"New message from {message['username']}",
-        'message': message['text'],
+        'message': message['text'],  # Ensure the message is in proper text format
     }
     
     try:
         # Send message to NTFY
         response = requests.post(NTFY_API_URL, json=payload)
         if response.status_code == 200:
-            pass  # Don't print anything for NTFY
+            pass  # No log for success
         else:
             print(f"❌ Failed to send to NTFY. Status Code: {response.status_code}")
     except Exception as e:
@@ -128,4 +128,3 @@ if __name__ == "__main__":
             time.sleep(1)
     except KeyboardInterrupt:
         print("Exiting due to user interrupt.")
-
