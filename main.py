@@ -1,61 +1,59 @@
 import asyncio
-import json
-import websockets
+from playwright.async_api import async_playwright
 import aiohttp
+import logging
+import time
 
-CHANNEL_NAME = "lastmove"   # hardcoded channel
+CHANNEL_NAME = "lastmove"
 NTFY_TOPIC = "streamchats123"
 
-KICK_WS_URL = "wss://chat-server.kick.com/ws"
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 
 async def send_ntfy(message: str):
-    """Send message to NTFY topic with a delay for spam proof."""
     async with aiohttp.ClientSession() as session:
         await session.post(f"https://ntfy.sh/{NTFY_TOPIC}", data=message.encode("utf-8"))
-    await asyncio.sleep(5)  # delay to avoid spam
+    await asyncio.sleep(5)  # 5s delay to prevent spam
 
 
-async def connect_to_chat():
-    """Keep trying to connect to Kick WebSocket and listen for messages."""
-    while True:
-        try:
-            print(f"🔎 Checking if channel '{CHANNEL_NAME}' is live...")
+async def fetch_chat():
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        page = await browser.new_page()
+        url = f"https://kick.com/{CHANNEL_NAME}"
+        await page.goto(url)
+        logging.info(f"🚀 Opened Kick channel: {CHANNEL_NAME}")
 
-            async with websockets.connect(KICK_WS_URL) as ws:
-                # Join chat room
-                join_payload = {
-                    "method": "join",
-                    "params": {
-                        "room": f"channel:{CHANNEL_NAME}"
-                    },
-                    "id": 1
-                }
-                await ws.send(json.dumps(join_payload))
+        # Wait for chat container to appear
+        await page.wait_for_selector('div[data-test-id="chat-message"]')
 
-                print(f"✅ Channel '{CHANNEL_NAME}' is LIVE. Listening for chats...")
+        logging.info("✅ Chat detected, listening for messages...")
 
-                # Process messages
-                async for raw_msg in ws:
-                    try:
-                        msg = json.loads(raw_msg)
+        # Listen for new messages
+        async def handle_message(message):
+            username = await message.query_selector_eval(
+                'span[data-test-id="username"]', 'el => el.textContent'
+            )
+            text = await message.query_selector_eval(
+                'div[data-test-id="message-content"]', 'el => el.textContent'
+            )
+            formatted = f"{username}: {text}"
+            logging.info(f"💬 {formatted}")
+            await send_ntfy(formatted)
 
-                        if "params" in msg and "room" in msg["params"]:
-                            data = msg["params"]
-                            if "username" in data and "content" in data:
-                                username = data["username"]
-                                text = data["content"]
-                                formatted = f"{username}: {text}"
-                                print(f"💬 {formatted}")
-                                await send_ntfy(formatted)
+        # Poll chat messages periodically
+        seen_messages = set()
+        while True:
+            messages = await page.query_selector_all('div[data-test-id="chat-message"]')
+            for msg in messages:
+                msg_id = await msg.get_attribute("id")
+                if msg_id not in seen_messages:
+                    seen_messages.add(msg_id)
+                    await handle_message(msg)
+            await asyncio.sleep(2)  # check every 2s
 
-                    except Exception as e:
-                        print(f"⚠️ Error parsing chat message: {e}")
-
-        except Exception as e:
-            print(f"❌ Channel '{CHANNEL_NAME}' seems OFFLINE or disconnected. Retrying in 5s... ({e})")
-            await asyncio.sleep(5)
+        await browser.close()
 
 
 if __name__ == "__main__":
-    asyncio.run(connect_to_chat())
+    asyncio.run(fetch_chat())
