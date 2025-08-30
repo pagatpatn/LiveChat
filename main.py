@@ -9,18 +9,18 @@ import requests
 # --- Config ---
 KICK_CHANNEL = os.getenv("KICK_CHANNEL", "default_channel")  # Default channel, set from env variable
 POLL_INTERVAL = 0.5  # Polling every 0.5 second for real-time chat capture
-TIME_WINDOW_MINUTES = 10  # Time window for fetching messages
-NTFY_API_URL = "https://ntfy.sh/streamchats123"  # Replace with your NTFY topic URL
+TIME_WINDOW_MINUTES = 2  # Time window for fetching messages (2 minutes)
+NTFY_API_URL = "https://ntfy.sh/YOUR_TOPIC"  # Replace with your NTFY topic URL
 
 if not KICK_CHANNEL:
     raise ValueError("Please set KICK_CHANNEL environment variable")
 
 kick_api = KickAPI()
 
-# Emoji mappings for the emote codes
+# Emoji mappings for the emote codes (you can add more here)
 EMOJI_MAP = {
-    "GiftedYAY": "🎉",  # Example mapping for the emoji
-    # Add more emotes as needed here, using the emote_name as key and emoji as value
+    "GiftedYAY": "🎉",  # Example emoji mapping
+    # Add more emotes as needed here
 }
 
 # Emoji regex pattern
@@ -33,7 +33,6 @@ def extract_emoji(text):
         # Replace emote with actual emoji text
         for match in matches:
             emote_id, emote_name = match
-            # Map the emote_name to the corresponding emoji
             emoji = EMOJI_MAP.get(emote_name, f"[{emote_name}]")  # Default to text if not found
             text = text.replace(f"[emote:{emote_id}:{emote_name}]", emoji)
     return text
@@ -52,7 +51,7 @@ def send_ntfy_notification(message):
         # Send message to NTFY
         response = requests.post(NTFY_API_URL, json=payload)
         if response.status_code == 200:
-            print(f"✅ Sent to NTFY: {message['username']}: {message['text']}")
+            pass  # Don't print anything for NTFY
         else:
             print(f"❌ Failed to send to NTFY. Status Code: {response.status_code}")
     except Exception as e:
