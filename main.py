@@ -1,130 +1,107 @@
 import os
 import time
-import threading
 import re
+import requests
 from datetime import datetime, timedelta
 from kickapi import KickAPI
-import requests
 
 # --- Config ---
-KICK_CHANNEL = os.getenv("KICK_CHANNEL", "default_channel")  # Default channel, set from env variable
-POLL_INTERVAL = 0.5  # Polling every 0.5 second for real-time chat capture
-TIME_WINDOW_MINUTES = 0.3  # Time window for fetching messages (2 minutes)
-NTFY_API_URL = "https://ntfy.sh/streamchats123"  # Replace with your NTFY topic URL
+KICK_CHANNEL = os.getenv("KICK_CHANNEL", "default_channel")  # Set default channel if not provided
+NTFY_TOPIC = os.getenv("NTFY_TOPIC", "kick-chat-notifications")  # Set default NTFY topic
+POLL_INTERVAL = 0.5  # Polling interval in seconds
+TIME_WINDOW_MINUTES = 0.3  # Time window for fetching messages (e.g., last 5 minutes)
 
 if not KICK_CHANNEL:
     raise ValueError("Please set KICK_CHANNEL environment variable")
 
 kick_api = KickAPI()
 
-# Emoji mappings for the emote codes (you can add more here)
+# --- Emoji Mapping ---
+# Replace the emote codes with real emojis, add more mappings as needed
 EMOJI_MAP = {
-    "GiftedYAY": "🎉",  # Example emoji mapping
-    # Add more emotes as needed here
+    "GiftedYAY": "🎉",
+    "ErectDance": "💃",
+    # Add more emojis if needed
 }
 
-# Emoji regex pattern
 emoji_pattern = r"\[emote:(\d+):([^\]]+)\]"
 
 def extract_emoji(text):
-    """Extract and replace emojis from the text."""
+    """Extract and replace emoji codes with real emojis."""
     matches = re.findall(emoji_pattern, text)
-    if matches:
-        # Replace emote with actual emoji text
-        for match in matches:
-            emote_id, emote_name = match
-            emoji = EMOJI_MAP.get(emote_name, f"[{emote_name}]")  # Default to text if not found
-            text = text.replace(f"[emote:{emote_id}:{emote_name}]", emoji)
+    for match in matches:
+        emote_id, emote_name = match
+        emoji = EMOJI_MAP.get(emote_name, f"[{emote_name}]")  # Default to text if no match found
+        text = text.replace(f"[emote:{emote_id}:{emote_name}]", emoji)
     return text
 
-def send_ntfy_notification(message):
-    """Send chat message to NTFY with a 5 second delay."""
-    time.sleep(5)  # Delay for 5 seconds before sending notification
-    
-    # Prepare the payload to send to NTFY
-    payload = {
-        'title': f"New message from {message['username']}",
-        'message': message['text'],  # Ensure the message is in proper text format
-    }
-    
+def send_ntfy(user, msg):
+    """Send chat message notifications to NTFY."""
     try:
-        # Send message to NTFY
-        response = requests.post(NTFY_API_URL, json=payload)
-        if response.status_code == 200:
-            pass  # No log for success
-        else:
-            print(f"❌ Failed to send to NTFY. Status Code: {response.status_code}")
+        # Format message before sending to NTFY
+        formatted_msg = f"{user}: {msg}"
+        requests.post(f"https://ntfy.sh/{NTFY_TOPIC}", data=formatted_msg.encode("utf-8"))
+        print(f"✅ Sent to NTFY: {user}: {msg}")
     except Exception as e:
-        print(f"❌ Error sending to NTFY: {e}")
+        print("⚠️ Failed to send NTFY:", e)
 
-def get_latest_message():
-    """Get the latest live chat message for a channel."""
+def get_live_chat():
+    """Fetch live chat messages for the given channel."""
     try:
+        print(f"Fetching live chat for channel: {KICK_CHANNEL}")
         channel = kick_api.channel(KICK_CHANNEL)
-        
+
         if not channel:
             print(f"❌ Channel {KICK_CHANNEL} not found.")
             return None
         
+        print(f"✅ Found channel {channel.username}")
         # Fetch messages within the last TIME_WINDOW_MINUTES
         past_time = datetime.utcnow() - timedelta(minutes=TIME_WINDOW_MINUTES)
         formatted_time = past_time.strftime('%Y-%m-%dT%H:%M:%S.000Z')
 
         chat = kick_api.chat(channel.id, formatted_time)
+        messages = []
         
         if chat and hasattr(chat, 'messages') and chat.messages:
-            # Only return the latest message
-            latest_message = chat.messages[-1]
-            return {
-                'username': latest_message.sender.username if hasattr(latest_message, 'sender') else 'Unknown',
-                'text': extract_emoji(latest_message.text) if hasattr(latest_message, 'text') else 'No text',
-                'timestamp': datetime.now().strftime('%H:%M:%S'),
-                'channel': channel.username
-            }
+            for msg in chat.messages:
+                # Extract and replace emoji
+                message_text = msg.text if hasattr(msg, 'text') else 'No text'
+                message_text = extract_emoji(message_text)  # Ensure emojis are parsed correctly
+                messages.append({
+                    'username': msg.sender.username if hasattr(msg, 'sender') else 'Unknown',
+                    'text': message_text,
+                    'timestamp': datetime.now().strftime('%H:%M:%S'),
+                    'channel': channel.username
+                })
         
-        return None
+        return messages
     except Exception as e:
         print(f"❌ Error fetching live chat: {e}")
         return None
 
 def listen_live_chat():
-    """Fetch and listen to live chat for a Kick video."""
-    last_fetched_message_id = None  # Track the last message ID to avoid duplicates
+    """Fetch and listen to live chat for the channel."""
+    print(f"🚀 Starting live chat listener for channel: {KICK_CHANNEL}")
+    last_fetched_messages = set()  # Track messages we've already sent
 
     while True:
-        latest_message = get_latest_message()
+        messages = get_live_chat()
         
-        if latest_message is None:
-            time.sleep(POLL_INTERVAL)  # No new messages, retrying after the interval
+        if not messages:
+            print("⏳ No new live messages, retrying in 10s...")
+            time.sleep(10)  # No new messages, retry
             continue
 
-        # Check if the message is new (based on message content and timestamp)
-        message_id = f"{latest_message['username']}:{latest_message['text']}"
-        
-        if message_id != last_fetched_message_id:
-            # Print the message to console immediately (real-time)
-            print(f"[{latest_message['timestamp']}] {latest_message['username']}: {latest_message['text']}")
+        for msg in messages:
+            msg_id = f"{msg['username']}:{msg['text']}"  # Unique message identifier
             
-            # Send the message to NTFY with 5 seconds delay in a separate thread
-            threading.Thread(target=send_ntfy_notification, args=(latest_message,)).start()
-            
-            last_fetched_message_id = message_id  # Update the last fetched message ID
+            if msg_id not in last_fetched_messages:
+                print(f"[{msg['timestamp']}] {msg['username']}: {msg['text']}")
+                send_ntfy(msg['username'], msg['text'])  # Send message to NTFY
+                last_fetched_messages.add(msg_id)  # Update last fetched messages
         
-        time.sleep(POLL_INTERVAL)  # Poll every 0.5 second for new messages
-
-def start_listener():
-    """Start the live chat listener in a background thread."""
-    listener_thread = threading.Thread(target=listen_live_chat)
-    listener_thread.daemon = True  # Allows thread to exit when the main program exits
-    listener_thread.start()
+        time.sleep(POLL_INTERVAL)  # Poll every few seconds
 
 if __name__ == "__main__":
-    start_listener()
-    print("Listener started. Running in the background...")
-
-    # Keep the main process alive, allowing the background thread to continue running.
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("Exiting due to user interrupt.")
+    listen_live_chat()
