@@ -1,73 +1,68 @@
 import os
 import time
-import json
+from datetime import datetime, timedelta
 import requests
-import websocket
-import threading
-import ssl
+from kickapi import KickAPI
 
 # --- Config ---
-KICK_CHANNEL = os.getenv("KICK_CHANNEL")  # e.g., LastMove
+KICK_CHANNEL = os.getenv("KICK_CHANNEL")
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "kick-chats")
-NTFY_DELAY = 5  # seconds between messages
+POLL_INTERVAL = 5  # seconds
 
 if not KICK_CHANNEL:
     raise ValueError("Please set KICK_CHANNEL environment variable")
 
-# --- NTFY sender ---
-def send_ntfy(user: str, message: str):
+kick_api = KickAPI()
+
+def send_ntfy(user, msg):
     try:
-        requests.post(
-            f"https://ntfy.sh/{NTFY_TOPIC}",
-            data=f"{user}: {message}".encode("utf-8")
-        )
-        time.sleep(NTFY_DELAY)
+        requests.post(f"https://ntfy.sh/{NTFY_TOPIC}", data=f"{user}: {msg}".encode("utf-8"))
+        time.sleep(POLL_INTERVAL)
     except Exception as e:
         print("⚠️ Failed to send NTFY:", e)
 
-# --- WebSocket handlers ---
-def on_message(ws, message):
+def get_live_video():
+    """Return live video object or None if no live"""
     try:
-        data = json.loads(message)
-        if "text" in data and "username" in data:
-            user = data["username"]
-            text = data["text"]
-            print(f"{user}: {text}")
-            send_ntfy(user, text)
+        channel = kick_api.channel(KICK_CHANNEL)
+        for video in channel.videos:
+            if getattr(video, "live", False):  # check live attribute
+                return video
     except Exception as e:
-        print("❌ Failed to parse message:", e)
+        print("❌ Failed to fetch channel/videos:", e)
+    return None
 
-def on_error(ws, error):
-    print("❌ WebSocket error:", error)
-
-def on_close(ws, close_status_code, close_msg):
-    print("⚠️ WebSocket closed. Retrying in 10s...")
-    time.sleep(10)
-    start_listener()  # auto-reconnect
-
-def on_open(ws):
-    print(f"✅ Connected to Kick chatroom: {KICK_CHANNEL}")
-
-# --- Start the listener ---
-def start_listener():
-    url = f"wss://kick.com/api/v2/channels/{KICK_CHANNEL}/chatroom"
-    try:
-        ws = websocket.WebSocketApp(
-            url,
-            on_message=on_message,
-            on_error=on_error,
-            on_close=on_close,
-            on_open=on_open,
-        )
-        ws.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE})
-    except Exception as e:
-        print("❌ Failed to connect, retrying in 10s...", e)
-        time.sleep(10)
-        start_listener()
-
-# --- Run ---
-if __name__ == "__main__":
-    threading.Thread(target=start_listener, daemon=True).start()
+def listen_live_chat():
     print(f"🚀 Starting Kick chat listener for channel: {KICK_CHANNEL}")
     while True:
-        time.sleep(1)
+        video = get_live_video()
+        if not video:
+            print("⏳ No live video, retrying in 10s...")
+            time.sleep(10)
+            continue
+
+        print(f"✅ Found live video: {video.title}")
+        # Parse start_time for chat polling
+        start_time_obj = datetime.strptime(video.start_time, "%Y-%m-%d %H:%M:%S")
+        while True:
+            try:
+                formatted_time = start_time_obj.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+                chat = kick_api.chat(video.channel.id, formatted_time)
+
+                for msg in chat.messages:
+                    user = msg.sender.username
+                    text = msg.text
+                    print(f"{user}: {text}")
+                    send_ntfy(user, text)
+
+                # increment start_time by POLL_INTERVAL
+                start_time_obj += timedelta(seconds=POLL_INTERVAL)
+                time.sleep(POLL_INTERVAL)
+
+            except Exception as e:
+                print("❌ Error fetching chat, retrying live video in 10s...", e)
+                time.sleep(10)
+                break  # break inner loop to re-fetch live video
+
+if __name__ == "__main__":
+    listen_live_chat()
