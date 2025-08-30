@@ -4,7 +4,7 @@ import requests
 from kickpython import KickAPI
 
 # --- Configuration ---
-KICK_CHANNEL = os.getenv("lastmove", "lastmove")  # use exact case!
+KICK_CHANNEL = os.getenv("@lastmove", "@lastmove")  # use exact case!
 NTFY_TOPIC = os.getenv("streamchats123", "kick-chats")
 NTFY_DELAY = 5  # seconds between each message to avoid spam
 
@@ -54,4 +54,5 @@ async def kick_listener():
 # --- Run ---
 if __name__ == "__main__":
     asyncio.run(kick_listener())
+
 
