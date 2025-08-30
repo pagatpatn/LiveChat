@@ -8,7 +8,7 @@ import requests
 
 # --- Config ---
 KICK_CHANNEL = os.getenv("KICK_CHANNEL", "default_channel")  # Default channel, set from env variable
-POLL_INTERVAL = 1  # Polling every 1 second for real-time chat capture
+POLL_INTERVAL = 0.5  # Polling every 0.5 second for real-time chat capture
 TIME_WINDOW_MINUTES = 10  # Time window for fetching messages
 NTFY_API_URL = "https://ntfy.sh/streamchats123"  # Replace with your NTFY topic URL
 
@@ -111,7 +111,7 @@ def listen_live_chat():
             
             last_fetched_message_id = message_id  # Update the last fetched message ID
         
-        time.sleep(POLL_INTERVAL)  # Poll every 1 second for new messages
+        time.sleep(POLL_INTERVAL)  # Poll every 0.5 second for new messages
 
 def start_listener():
     """Start the live chat listener in a background thread."""
