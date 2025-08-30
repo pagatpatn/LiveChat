@@ -1,66 +1,58 @@
 import asyncio
-import json
 import websockets
+import json
 import httpx
-import time
+import logging
+from fastapi import FastAPI
+import uvicorn
 
-# Hardcode your channel name
-CHANNEL_NAME = "lastmove"
+# ---------- CONFIG ----------
+CHANNEL_NAME = "LastMove"
+NTFY_TOPIC = "streamchats123"
+# ----------------------------
 
-# NTFY topic for notifications
-NTFY_TOPIC = "kickchats"
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-# Kick WebSocket endpoint
-KICK_WS = "wss://ws2.kick.com/socket.io/?EIO=3&transport=websocket"
+app = FastAPI()
+
+@app.get("/")
+def home():
+    return {"status": "Kick Chat Fetcher is running!"}
 
 async def send_to_ntfy(message: str):
-    """Send chat message to ntfy topic"""
-    url = f"https://ntfy.sh/{NTFY_TOPIC}"
-    try:
-        async with httpx.AsyncClient() as client:
-            await client.post(url, content=message)
-    except Exception as e:
-        print(f"❌ Failed to send ntfy message: {e}")
+    async with httpx.AsyncClient() as client:
+        await client.post(f"https://ntfy.sh/{NTFY_TOPIC}", data=message.encode("utf-8"))
 
-async def connect_kick():
-    """Connect to Kick websocket and fetch chat messages"""
+async def connect_to_chat():
+    url = f"wss://chat.kick.com/socket.io/?EIO=4&transport=websocket"
+
     while True:
         try:
-            async with websockets.connect(KICK_WS) as ws:
-                print(f"🚀 Connected to Kick WebSocket for channel: {CHANNEL_NAME}")
-
-                # Kick WebSocket handshake
-                await ws.send("40")  
-
-                # Subscribe to channel room
-                await ws.send(f'42["join",{{"name":"chatrooms.{CHANNEL_NAME}"}}]')
+            async with websockets.connect(url) as ws:
+                logging.info(f"🚀 Connected to Kick WebSocket for channel: {CHANNEL_NAME}")
 
                 while True:
                     msg = await ws.recv()
-                    
-                    if msg.startswith("42"):
+
+                    # Simple debug log
+                    if "text" in msg:
                         try:
-                            data = json.loads(msg[2:])
-                            event = data[0]
-                            payload = data[1]
-
-                            if event == "ChatMessage":
-                                username = payload["sender"]["username"]
-                                text = payload["content"]
-                                message = f"{username}: {text}"
-
-                                print(f"💬 {message}")
-                                await send_to_ntfy(message)
-
-                                # Delay 5s to prevent spam flood
-                                time.sleep(5)
-
-                        except Exception as e:
-                            print(f"⚠️ Error parsing message: {e}")
+                            data = json.loads(msg)
+                            username = data.get("username", "Unknown")
+                            text = data.get("text", "")
+                            formatted = f"{username}: {text}"
+                            logging.info(f"💬 {formatted}")
+                            await send_to_ntfy(formatted)
+                            await asyncio.sleep(5)  # delay for spam-proof
+                        except:
+                            pass
         except Exception as e:
-            print(f"❌ Disconnected from Kick WebSocket: {e}")
-            print("🔄 Retrying in 5s...")
+            logging.error(f"⚠️ Disconnected from WebSocket, retrying in 5s... {e}")
             await asyncio.sleep(5)
 
+@app.on_event("startup")
+async def start_fetcher():
+    asyncio.create_task(connect_to_chat())
+
 if __name__ == "__main__":
-    asyncio.run(connect_kick())
+    uvicorn.run(app, host="0.0.0.0", port=10000)
