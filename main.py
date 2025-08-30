@@ -9,7 +9,7 @@ import re
 KICK_CHANNEL = os.getenv("KICK_CHANNEL", "default_channel")  # Set default channel if not provided
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "kick-chat-notifications")  # Set default NTFY topic
 POLL_INTERVAL = 5  # Polling interval in seconds
-TIME_WINDOW_MINUTES = 5  # Time window for fetching messages (e.g., last 5 minutes)
+TIME_WINDOW_MINUTES = 1  # Time window for fetching messages (e.g., last 5 minutes)
 
 if not KICK_CHANNEL:
     raise ValueError("Please set KICK_CHANNEL environment variable")
@@ -42,13 +42,7 @@ def send_ntfy(user, msg):
         formatted_msg = f"{user}: {msg}"
         
         # Send the notification without revealing the URL (we are only passing the message)
-        response = requests.post(f"https://ntfy.sh/{NTFY_TOPIC}", data=formatted_msg.encode("utf-8"))
-        
-        # Handle response and check for success
-        if response.status_code == 200:
-            print(f"Notification sent: {formatted_msg}")
-        else:
-            print(f"Failed to send NTFY message, Status Code: {response.status_code}")
+        requests.post(f"https://ntfy.sh/{NTFY_TOPIC}", data=formatted_msg.encode("utf-8"))
     except Exception as e:
         print("⚠️ Failed to send NTFY:", e)
 
