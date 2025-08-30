@@ -58,6 +58,8 @@ def get_live_chat():
 def listen_live_chat():
     """Fetch and listen to live chat for a Kick video."""
     print(f"🚀 Starting live chat listener for channel: {KICK_CHANNEL}")
+    last_fetched_messages = set()  # Store messages we have already sent
+
     while True:
         messages = get_live_chat()
         
@@ -67,8 +69,14 @@ def listen_live_chat():
             continue
 
         for msg in messages:
-            print(f"{msg['username']}: {msg['text']}")
-            send_ntfy(msg['username'], msg['text'])
+            msg_id = f"{msg['username']}:{msg['text']}"  # Unique message identifier
+            
+            if msg_id not in last_fetched_messages:
+                print(f"{msg['username']}: {msg['text']}")
+                send_ntfy(msg['username'], msg['text'])
+                last_fetched_messages.add(msg_id)
+
+        time.sleep(10)  # Poll every 10 seconds
 
 if __name__ == "__main__":
     listen_live_chat()
