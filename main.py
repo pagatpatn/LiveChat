@@ -23,22 +23,22 @@ async def send_ntfy(user: str, message: str):
 async def kick_listener():
     print(f"🚀 Starting Kick chat listener for channel: {KICK_CHANNEL}")
 
-    async with KickAPI() as api:
-        while True:
-            channels = await api.get_channels(KICK_CHANNEL)
-            if not channels:
-                print(f"❌ Channel '{KICK_CHANNEL}' not found, retrying in 10s...")
-                await asyncio.sleep(10)
-                continue
+    api = KickAPI()  # just create an instance normally
+    while True:
+        channels = await api.get_channels(KICK_CHANNEL)
+        if not channels:
+            print(f"❌ Channel '{KICK_CHANNEL}' not found, retrying in 10s...")
+            await asyncio.sleep(10)
+            continue
 
-            channel = channels[0]
-            print(f"✅ Found channel: {channel.username}")
+        channel = channels[0]
+        print(f"✅ Found channel: {channel.username}")
 
-            async for chat in api.get_chat(channel.id):
-                user = chat.user.username
-                message = chat.content
-                print(f"{user}: {message}")
-                await send_ntfy(user, message)
+        async for chat in api.get_chat(channel.id):
+            user = chat.user.username
+            message = chat.content
+            print(f"{user}: {message}")
+            await send_ntfy(user, message)
 
 # --- Run ---
 if __name__ == "__main__":
