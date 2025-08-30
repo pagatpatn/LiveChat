@@ -8,8 +8,8 @@ import re
 # --- Config ---
 KICK_CHANNEL = os.getenv("KICK_CHANNEL", "default_channel")  # Set default channel if not provided
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "kick-chat-notifications")  # Set default NTFY topic
-POLL_INTERVAL = 1  # Polling interval in seconds
-TIME_WINDOW_MINUTES = 5  # Time window for fetching messages (e.g., last 5 minutes)
+POLL_INTERVAL = 5  # Polling interval in seconds
+TIME_WINDOW_MINUTES = 1  # Time window for fetching messages (e.g., last 5 minutes)
 
 if not KICK_CHANNEL:
     raise ValueError("Please set KICK_CHANNEL environment variable")
@@ -40,6 +40,8 @@ def send_ntfy(user, msg):
     try:
         # Format message before sending to NTFY
         formatted_msg = f"{user}: {msg}"
+        
+        # Send the notification without revealing the URL (we are only passing the message)
         requests.post(f"https://ntfy.sh/{NTFY_TOPIC}", data=formatted_msg.encode("utf-8"))
     except Exception as e:
         print("⚠️ Failed to send NTFY:", e)
@@ -105,4 +107,3 @@ def listen_live_chat():
 
 if __name__ == "__main__":
     listen_live_chat()
-
