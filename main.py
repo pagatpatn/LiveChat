@@ -7,7 +7,8 @@ from kickapi import KickAPI
 # --- Config ---
 KICK_CHANNEL = os.getenv("KICK_CHANNEL", "default_channel")
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "kick-chat-notifications")
-POLL_INTERVAL = 5  # seconds
+POLL_INTERVAL = 10  # seconds
+TIME_WINDOW_MINUTES = 5  # Increase time window to 5 minutes
 
 if not KICK_CHANNEL:
     raise ValueError("Please set KICK_CHANNEL environment variable")
@@ -33,8 +34,8 @@ def get_live_chat():
             return None
         
         print(f"✅ Found channel {channel.username}")
-        # Fetch messages within the last 2 minutes
-        past_time = datetime.utcnow() - timedelta(minutes=2)
+        # Fetch messages within the last TIME_WINDOW_MINUTES
+        past_time = datetime.utcnow() - timedelta(minutes=TIME_WINDOW_MINUTES)
         formatted_time = past_time.strftime('%Y-%m-%dT%H:%M:%S.000Z')
 
         chat = kick_api.chat(channel.id, formatted_time)
