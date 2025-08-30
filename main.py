@@ -15,6 +15,7 @@ if not KICK_CHANNEL:
 kick_api = KickAPI()
 
 def send_ntfy(user, msg):
+    """Send chat message notifications."""
     try:
         requests.post(f"https://ntfy.sh/{NTFY_TOPIC}", data=f"{user}: {msg}".encode("utf-8"))
         time.sleep(POLL_INTERVAL)
@@ -22,18 +23,26 @@ def send_ntfy(user, msg):
         print("⚠️ Failed to send NTFY:", e)
 
 def get_live_video():
-    """Return live video object or None if no live"""
+    """Return live video object or None if no live video is found."""
     try:
+        print(f"Fetching data for channel: {KICK_CHANNEL}")
+        
         # Attempt to fetch using just the channel name
         channel = kick_api.channel(KICK_CHANNEL)
-        
+
         if not channel:  # if channel is None, try full URL (fallback)
             print(f"⚠️ Channel {KICK_CHANNEL} not found, trying full URL...")
             channel = kick_api.channel(f"https://kick.com/{KICK_CHANNEL}")  # Use full URL
 
         if channel:
+            print(f"✅ Channel {channel.username} found.")
+            # Log the channel's raw data
+            print(f"Channel Raw Data: {channel.__dict__}")
+            
             for video in channel.videos:
-                if getattr(video, "live", False):  # check live attribute
+                # Log the video data for debugging
+                print(f"Video Raw Data: {video.__dict__}")
+                if hasattr(video, "live") and video.live:  # check live attribute
                     return video
         else:
             print("❌ Channel not found or videos not available.")
@@ -42,6 +51,7 @@ def get_live_video():
     return None
 
 def listen_live_chat():
+    """Fetch and listen to live chat for a Kick video."""
     print(f"🚀 Starting Kick chat listener for channel: {KICK_CHANNEL}")
     while True:
         video = get_live_video()
@@ -51,13 +61,18 @@ def listen_live_chat():
             continue
 
         print(f"✅ Found live video: {video.title}")
+        
         # Parse start_time for chat polling
         start_time_obj = datetime.strptime(video.start_time, "%Y-%m-%d %H:%M:%S")
         while True:
             try:
                 formatted_time = start_time_obj.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+                print(f"Fetching chat data at time: {formatted_time}")
                 chat = kick_api.chat(video.channel.id, formatted_time)
 
+                # Log chat data for debugging
+                print(f"Fetched {len(chat.messages)} messages.")
+                
                 for msg in chat.messages:
                     user = msg.sender.username
                     text = msg.text
