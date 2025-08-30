@@ -35,23 +35,17 @@ def kick_listener():
             # Fetch channel info
             channel = api.channel(KICK_CHANNEL)
             if not channel:
-                print(f"❌ Channel '{KICK_CHANNEL}' not found or offline, retrying in 10s...")
+                print(f"❌ Channel '{KICK_CHANNEL}' not found, retrying in 10s...")
                 time.sleep(10)
                 continue
 
-            # Get live stream video (assuming first video is live)
-            videos = api.videos(channel.id)
-            if not videos:
-                print(f"⏳ No active live video for '{KICK_CHANNEL}', retrying in 10s...")
+            # Check if channel is live
+            if not channel.live or not channel.live.stream:
+                print(f"⏳ Channel is not live, retrying in 10s...")
                 time.sleep(10)
                 continue
 
-            live_video = videos[0]  # pick first
-            if not live_video.stream:
-                print(f"⏳ Video is not live, retrying in 10s...")
-                time.sleep(10)
-                continue
-
+            live_video = channel.live
             print(f"✅ Found live video: {live_video.title}")
 
             # Convert start time for KickApi chat fetching
