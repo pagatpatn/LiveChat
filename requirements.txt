@@ -1,4 +1,4 @@
-fastapi
-uvicorn
-httpx
 websockets
+aiohttp
+uvicorn
+fastapi
