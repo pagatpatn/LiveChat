@@ -1,16 +1,15 @@
 import os
 import time
-import re
 import requests
 from datetime import datetime, timedelta
 from kickapi import KickAPI
-from threading import Timer
+import re
 
 # --- Config ---
 KICK_CHANNEL = os.getenv("KICK_CHANNEL", "default_channel")  # Set default channel if not provided
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "kick-chat-notifications")  # Set default NTFY topic
-POLL_INTERVAL = 0.5  # Polling interval in seconds
-TIME_WINDOW_MINUTES = 0.5  # Time window for fetching messages (e.g., last 5 minutes)
+POLL_INTERVAL = 5  # Polling interval in seconds
+TIME_WINDOW_MINUTES = 1  # Time window for fetching messages (e.g., last 5 minutes)
 
 if not KICK_CHANNEL:
     raise ValueError("Please set KICK_CHANNEL environment variable")
@@ -98,13 +97,16 @@ def listen_live_chat():
         for msg in messages:
             msg_id = f"{msg['username']}:{msg['text']}"  # Unique message identifier
             
-            if msg_id not in last_fetched_messages and time.time() - last_sent_time >= 5:
-                print(f"[{msg['timestamp']}] {msg['username']}: {msg['text']}")
-                send_ntfy(msg['username'], msg['text'])  # Send message to NTFY
-                last_fetched_messages.add(msg_id)  # Update last fetched messages
-                last_sent_time = time.time()  # Update last sent time
-            else:
-                print(f"⏳ Waiting for 5s before sending message: {msg['text']}")
+            # Prevent message from being captured again
+            if msg_id not in last_fetched_messages:
+                # Check if we should send to NTFY
+                if time.time() - last_sent_time >= 5:
+                    print(f"[{msg['timestamp']}] {msg['username']}: {msg['text']}")
+                    send_ntfy(msg['username'], msg['text'])  # Send message to NTFY
+                    last_fetched_messages.add(msg_id)  # Add message to set to prevent re-sending
+                    last_sent_time = time.time()  # Update last sent time
+                else:
+                    print(f"⏳ Waiting for 5s before sending message: {msg['text']}")
         
         time.sleep(POLL_INTERVAL)  # Poll every few seconds
 
