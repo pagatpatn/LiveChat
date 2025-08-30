@@ -4,8 +4,8 @@ import requests
 from kickpython import KickAPI
 
 # --- Configuration ---
-KICK_CHANNEL = os.getenv("lastmove", "lastmove")  # replace with your channel name
-NTFY_TOPIC = os.getenv("streamchats123", "kick-chats")    # replace with your NTFY topic
+KICK_CHANNEL = os.getenv("lastmove", "lastmove")
+NTFY_TOPIC = os.getenv("streamchats123", "kick-chats")
 
 # --- Initialize Kick API ---
 api = KickAPI()  # public channel, no OAuth needed
@@ -23,7 +23,13 @@ def send_ntfy(user: str, message: str):
 # --- Kick Chat Listener ---
 async def kick_listener():
     print(f"🚀 Starting Kick chat listener for channel: {KICK_CHANNEL}")
-    channel = await api.get_channel(KICK_CHANNEL)
+
+    # Use get_channels instead of get_channel
+    channels = await api.get_channels(KICK_CHANNEL)
+    if not channels:
+        print(f"❌ Channel '{KICK_CHANNEL}' not found")
+        return
+    channel = channels[0]  # pick the first match
 
     async for chat in api.get_chat(channel.id):
         user = chat.user.username
