@@ -1,2 +1,2 @@
-KickApi
+websocket-client
 requests
