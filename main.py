@@ -8,8 +8,8 @@ from kickapi import KickAPI
 # --- Config ---
 KICK_CHANNEL = os.getenv("KICK_CHANNEL", "default_channel")
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "kick-chat-notifications")
-POLL_INTERVAL = 5  # Polling every 5 seconds
-TIME_WINDOW_MINUTES = 10  # Time window for fetching messages
+POLL_INTERVAL = 5  # Reduced polling interval to 5 seconds
+TIME_WINDOW_MINUTES = 10  # Increased time window to 10 minutes
 
 if not KICK_CHANNEL:
     raise ValueError("Please set KICK_CHANNEL environment variable")
@@ -37,8 +37,8 @@ def extract_emoji(text):
             text = text.replace(f"[emote:{emote_id}:{emote_name}]", f"🎉 {emote_name}")  # Example of emoji handling
     return text
 
-def get_latest_message():
-    """Get the latest live chat message for a channel."""
+def get_live_chat():
+    """Get live chat messages for a channel."""
     try:
         channel = kick_api.channel(KICK_CHANNEL)
         
@@ -51,41 +51,41 @@ def get_latest_message():
         formatted_time = past_time.strftime('%Y-%m-%dT%H:%M:%S.000Z')
 
         chat = kick_api.chat(channel.id, formatted_time)
+        messages = []
         
         if chat and hasattr(chat, 'messages') and chat.messages:
-            # Only return the latest message
-            latest_message = chat.messages[-1]
-            return {
-                'username': latest_message.sender.username if hasattr(latest_message, 'sender') else 'Unknown',
-                'text': extract_emoji(latest_message.text) if hasattr(latest_message, 'text') else 'No text',
-                'timestamp': datetime.now().strftime('%H:%M:%S'),
-                'channel': channel.username
-            }
+            for msg in chat.messages:
+                messages.append({
+                    'username': msg.sender.username if hasattr(msg, 'sender') else 'Unknown',
+                    'text': extract_emoji(msg.text) if hasattr(msg, 'text') else 'No text',
+                    'timestamp': datetime.now().strftime('%H:%M:%S'),
+                    'channel': channel.username
+                })
         
-        return None
+        return messages
     except Exception as e:
         print(f"❌ Error fetching live chat: {e}")
         return None
 
 def listen_live_chat():
     """Fetch and listen to live chat for a Kick video."""
-    last_fetched_message_id = None  # Track the last message ID to avoid duplicates
+    last_fetched_messages = set()  # Store messages we have already sent
 
     while True:
-        latest_message = get_latest_message()
+        messages = get_live_chat()
         
-        if latest_message is None:
+        if not messages:
             time.sleep(POLL_INTERVAL)  # No new messages, retrying after the interval
             continue
 
-        # Check if the message is new (based on message content and timestamp)
-        message_id = f"{latest_message['username']}:{latest_message['text']}"
-        
-        if message_id != last_fetched_message_id:
-            print(f"{latest_message['username']}: {latest_message['text']}")
-            send_ntfy(latest_message['username'], latest_message['text'])
-            last_fetched_message_id = message_id  # Update the last fetched message ID
-        
+        for msg in messages:
+            msg_id = f"{msg['username']}:{msg['text']}"  # Unique message identifier
+            
+            if msg_id not in last_fetched_messages:
+                print(f"{msg['username']}: {msg['text']}")
+                send_ntfy(msg['username'], msg['text'])
+                last_fetched_messages.add(msg_id)
+
         time.sleep(POLL_INTERVAL)  # Poll every 5 seconds
 
 if __name__ == "__main__":
