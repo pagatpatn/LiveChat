@@ -6,7 +6,7 @@ import requests
 from datetime import datetime
 
 # --- Environment Variables ---
-KICK_CHANNEL = os.getenv("KICK_CHANNEL", "your_channel_name")
+KICK_CHANNEL = os.getenv("KICK_CHANNEL", "LastMove")
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "chat-notifier")
 
 # --- Fetch WebSocket URL ---
@@ -43,3 +43,4 @@ async def listen_chat():
 # --- Run the Listener ---
 if __name__ == "__main__":
     asyncio.run(listen_chat())
+
