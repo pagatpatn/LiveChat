@@ -41,21 +41,18 @@ def send_ntfy(user, msg):
         # Format message before sending to NTFY
         formatted_msg = f"{user}: {msg}"
         requests.post(f"https://ntfy.sh/{NTFY_TOPIC}", data=formatted_msg.encode("utf-8"))
-        print(f"✅ Sent to NTFY: {user}: {msg}")
     except Exception as e:
         print("⚠️ Failed to send NTFY:", e)
 
 def get_live_chat():
     """Fetch live chat messages for the given channel."""
     try:
-        print(f"Fetching live chat for channel: {KICK_CHANNEL}")
+        # Fetching chat for the specified channel
         channel = kick_api.channel(KICK_CHANNEL)
 
         if not channel:
-            print(f"❌ Channel {KICK_CHANNEL} not found.")
             return None
         
-        print(f"✅ Found channel {channel.username}")
         # Fetch messages within the last TIME_WINDOW_MINUTES
         past_time = datetime.utcnow() - timedelta(minutes=TIME_WINDOW_MINUTES)
         formatted_time = past_time.strftime('%Y-%m-%dT%H:%M:%S.000Z')
@@ -77,12 +74,10 @@ def get_live_chat():
         
         return messages
     except Exception as e:
-        print(f"❌ Error fetching live chat: {e}")
         return None
 
 def listen_live_chat():
     """Fetch and listen to live chat for the channel."""
-    print(f"🚀 Starting live chat listener for channel: {KICK_CHANNEL}")
     last_fetched_messages = set()  # Track messages we've already sent
     last_sent_time = time.time()  # Store the time of the last message sent to NTFY
 
@@ -90,7 +85,6 @@ def listen_live_chat():
         messages = get_live_chat()
         
         if not messages:
-            print("⏳ No new live messages, retrying in 10s...")
             time.sleep(10)  # No new messages, retry
             continue
 
@@ -101,12 +95,11 @@ def listen_live_chat():
             if msg_id not in last_fetched_messages:
                 # Check if we should send to NTFY
                 if time.time() - last_sent_time >= 5:
+                    # Log only the messages we are sending
                     print(f"[{msg['timestamp']}] {msg['username']}: {msg['text']}")
                     send_ntfy(msg['username'], msg['text'])  # Send message to NTFY
                     last_fetched_messages.add(msg_id)  # Add message to set to prevent re-sending
                     last_sent_time = time.time()  # Update last sent time
-                else:
-                    print(f"⏳ Waiting for 5s before sending message: {msg['text']}")
         
         time.sleep(POLL_INTERVAL)  # Poll every few seconds
 
