@@ -9,13 +9,19 @@ import threading
 # --- Config ---
 KICK_CHANNEL = os.getenv("KICK_CHANNEL", "default_channel")
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "kick-chat-notifications")
-POLL_INTERVAL = 3  # Polling every 5 seconds
-TIME_WINDOW_MINUTES = 5  # Time window for fetching messages
+POLL_INTERVAL = 5  # Polling every 5 seconds
+TIME_WINDOW_MINUTES = 10  # Time window for fetching messages
 
 if not KICK_CHANNEL:
     raise ValueError("Please set KICK_CHANNEL environment variable")
 
 kick_api = KickAPI()
+
+# Emoji mappings for the emote codes
+EMOJI_MAP = {
+    "GiftedYAY": "🎉",  # Example mapping for the emoji
+    # Add more emotes as needed here, using the emote_name as key and emoji as value
+}
 
 # Emoji regex pattern
 emoji_pattern = r"\[emote:(\d+):([^\]]+)\]"
@@ -35,7 +41,9 @@ def extract_emoji(text):
         # Replace emote with actual emoji text
         for match in matches:
             emote_id, emote_name = match
-            text = text.replace(f"[emote:{emote_id}:{emote_name}]", f"🎉 {emote_name}")  # Example of emoji handling
+            # Map the emote_name to the corresponding emoji
+            emoji = EMOJI_MAP.get(emote_name, f"[{emote_name}]")  # Default to text if not found
+            text = text.replace(f"[emote:{emote_id}:{emote_name}]", emoji)
     return text
 
 def get_latest_message():
@@ -84,6 +92,9 @@ def listen_live_chat():
         
         if message_id != last_fetched_message_id:
             print(f"{latest_message['username']}: {latest_message['text']}")
+            
+            # Wait for 5 seconds before sending the message to NTFY
+            time.sleep(5)
             send_ntfy(latest_message['username'], latest_message['text'])
             last_fetched_message_id = message_id  # Update the last fetched message ID
         
