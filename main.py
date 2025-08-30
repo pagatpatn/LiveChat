@@ -24,12 +24,21 @@ def send_ntfy(user, msg):
 def get_live_video():
     """Return live video object or None if no live"""
     try:
+        # Attempt to fetch using just the channel name
         channel = kick_api.channel(KICK_CHANNEL)
-        for video in channel.videos:
-            if getattr(video, "live", False):  # check live attribute
-                return video
+        
+        if not channel:  # if channel is None, try full URL (fallback)
+            print(f"⚠️ Channel {KICK_CHANNEL} not found, trying full URL...")
+            channel = kick_api.channel(f"https://kick.com/{KICK_CHANNEL}")  # Use full URL
+
+        if channel:
+            for video in channel.videos:
+                if getattr(video, "live", False):  # check live attribute
+                    return video
+        else:
+            print("❌ Channel not found or videos not available.")
     except Exception as e:
-        print("❌ Failed to fetch channel/videos:", e)
+        print(f"❌ Failed to fetch channel/videos: {e}")
     return None
 
 def listen_live_chat():
