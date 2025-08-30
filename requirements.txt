@@ -2,4 +2,5 @@ kickpython
 websockets
 requests
 aiohttp
+curlcffi
 
