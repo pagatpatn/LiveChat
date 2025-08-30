@@ -9,8 +9,8 @@ import requests
 # --- Config ---
 KICK_CHANNEL = os.getenv("KICK_CHANNEL", "default_channel")  # Default channel, set from env variable
 POLL_INTERVAL = 0.5  # Polling every 0.5 second for real-time chat capture
-TIME_WINDOW_MINUTES = 2  # Time window for fetching messages (2 minutes)
-NTFY_API_URL = "https://ntfy.sh/YOUR_TOPIC"  # Replace with your NTFY topic URL
+TIME_WINDOW_MINUTES = 0.6  # Time window for fetching messages
+NTFY_API_URL = "https://ntfy.sh/streamchats123"  # Replace with your NTFY topic URL
 
 if not KICK_CHANNEL:
     raise ValueError("Please set KICK_CHANNEL environment variable")
@@ -128,3 +128,4 @@ if __name__ == "__main__":
             time.sleep(1)
     except KeyboardInterrupt:
         print("Exiting due to user interrupt.")
+
