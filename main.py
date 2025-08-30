@@ -3,12 +3,15 @@ import asyncio
 import requests
 from kickpython import KickAPI
 
-# --- Configuration ---
-KICK_CHANNEL = os.getenv("@lastmove", "@lastmove")  # use exact case!
-NTFY_TOPIC = os.getenv("streamchats123", "kick-chats")
-NTFY_DELAY = 5  # seconds between each message to avoid spam
+# --- Config from Railway environment variables ---
+KICK_CHANNEL = os.getenv("KICK_CHANNEL")  # e.g., "LastMove"
+NTFY_TOPIC = os.getenv("NTFY_TOPIC", "kick-chats")
+NTFY_DELAY = 5  # seconds between messages
 
-# --- Send to NTFY ---
+if not KICK_CHANNEL:
+    raise ValueError("❌ Please set the KICK_CHANNEL environment variable on Railway")
+
+# --- Send message to NTFY ---
 async def send_ntfy(user: str, message: str):
     try:
         requests.post(
@@ -19,12 +22,11 @@ async def send_ntfy(user: str, message: str):
     except Exception as e:
         print("⚠️ Failed to send NTFY:", e)
 
-# --- Kick Chat Listener ---
+# --- Kick chat listener ---
 async def kick_listener():
     print(f"🚀 Starting Kick chat listener for channel: {KICK_CHANNEL}")
 
-    api = KickAPI()  # normal instance, not async context
-
+    api = KickAPI()  # Normal instance
     while True:
         try:
             channels = await api.get_channels(KICK_CHANNEL)
@@ -54,5 +56,3 @@ async def kick_listener():
 # --- Run ---
 if __name__ == "__main__":
     asyncio.run(kick_listener())
-
-
