@@ -6,7 +6,7 @@ import websocket
 import threading
 import ssl
 
-# --- Config from Railway environment variables ---
+# --- Config ---
 KICK_CHANNEL = os.getenv("KICK_CHANNEL")  # e.g., LastMove
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "kick-chats")
 NTFY_DELAY = 5  # seconds between messages
@@ -29,7 +29,6 @@ def send_ntfy(user: str, message: str):
 def on_message(ws, message):
     try:
         data = json.loads(message)
-        # Kick chat messages usually contain 'text' and 'username'
         if "text" in data and "username" in data:
             user = data["username"]
             text = data["text"]
@@ -42,8 +41,8 @@ def on_error(ws, error):
     print("❌ WebSocket error:", error)
 
 def on_close(ws, close_status_code, close_msg):
-    print("⚠️ WebSocket closed. Reconnecting in 5s...")
-    time.sleep(5)
+    print("⚠️ WebSocket closed. Retrying in 10s...")
+    time.sleep(10)
     start_listener()  # auto-reconnect
 
 def on_open(ws):
@@ -52,14 +51,19 @@ def on_open(ws):
 # --- Start the listener ---
 def start_listener():
     url = f"wss://kick.com/api/v2/channels/{KICK_CHANNEL}/chatroom"
-    ws = websocket.WebSocketApp(
-        url,
-        on_message=on_message,
-        on_error=on_error,
-        on_close=on_close,
-        on_open=on_open,
-    )
-    ws.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE})
+    try:
+        ws = websocket.WebSocketApp(
+            url,
+            on_message=on_message,
+            on_error=on_error,
+            on_close=on_close,
+            on_open=on_open,
+        )
+        ws.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE})
+    except Exception as e:
+        print("❌ Failed to connect, retrying in 10s...", e)
+        time.sleep(10)
+        start_listener()
 
 # --- Run ---
 if __name__ == "__main__":
