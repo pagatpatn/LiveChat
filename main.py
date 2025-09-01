@@ -21,6 +21,8 @@ kick_api = KickAPI()
 emoji_pattern = r"\[emote:(\d+):([^\]]+)\]"
 
 global_emotes = {}
+emote_cache = {}  # <-- NEW: Cache for emote base64 images
+
 
 def load_global_emotes():
     """Fetch global emotes from BTTV, 7TV, and FFZ."""
@@ -70,24 +72,34 @@ def extract_emojis(text: str):
     return text.strip(), emote_urls
 
 
+def fetch_emote_base64(url):
+    """Download emote once and cache it as base64."""
+    if url in emote_cache:
+        return emote_cache[url]
+
+    try:
+        resp = requests.get(url, timeout=5)
+        if resp.status_code == 200:
+            img_data = base64.b64encode(resp.content).decode("utf-8")
+            emote_cache[url] = img_data  # store in cache
+            return img_data
+    except Exception:
+        return None
+    return None
+
+
 def print_with_images(username, msg, emotes):
     """Print message with inline images if supported, otherwise URLs."""
     sys.stdout.reconfigure(encoding='utf-8')
     rendered = f"{username}: {msg}"
 
     for url in emotes:
-        try:
-            # Fetch image
-            resp = requests.get(url, timeout=5)
-            if resp.status_code == 200:
-                img_data = base64.b64encode(resp.content).decode("utf-8")
-
-                # iTerm2/kitty inline image escape sequence
-                inline_img = f"\033]1337;File=inline=1;width=auto;height=auto;preserveAspectRatio=1:{img_data}\a"
-                rendered += " " + inline_img
-            else:
-                rendered += " " + url
-        except Exception:
+        img_data = fetch_emote_base64(url)
+        if img_data:
+            # Inline image escape sequence (works in iTerm2/kitty/wezterm)
+            inline_img = f"\033]1337;File=inline=1;width=auto;height=auto;preserveAspectRatio=1:{img_data}\a"
+            rendered += " " + inline_img
+        else:
             rendered += " " + url
 
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {rendered}")
