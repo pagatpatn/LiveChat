@@ -1,0 +1,4 @@
+KickApi
+websocket-client
+emoji
+requests
