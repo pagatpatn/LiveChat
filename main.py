@@ -21,11 +21,14 @@ if not PAGE_URL:
 # Selenium setup
 # ----------------------
 options = uc.ChromeOptions()
-options.add_argument("--headless=new")  # fixed headless mode
+options.add_argument("--headless=new")
 options.add_argument("--disable-gpu")
 options.add_argument("--no-sandbox")
 options.add_argument("--disable-dev-shm-usage")
 options.add_argument("--remote-allow-origins=*")
+
+# Specify the Chromium binary installed in Railway
+options.binary_location = "/usr/bin/chromium"
 
 driver = uc.Chrome(options=options)
 driver.get(PAGE_URL)
