@@ -1,5 +1,7 @@
 KickApi
 websocket-client
-emoji
+Flask
+selenium
 requests
+
 
