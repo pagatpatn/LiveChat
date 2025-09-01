@@ -3,11 +3,11 @@ import requests
 import time
 
 # ----------------------
-# Configuration from environment
+# Configuration
 # ----------------------
 PAGE_ID = os.getenv("FB_PAGE_ID")
 PAGE_TOKEN = os.getenv("FB_PAGE_TOKEN")
-POLL_INTERVAL = 5  # seconds between comment fetches
+POLL_INTERVAL = 5  # seconds
 
 if not PAGE_ID or not PAGE_TOKEN:
     print("Please set environment variables FB_PAGE_ID and FB_PAGE_TOKEN")
@@ -17,38 +17,26 @@ if not PAGE_ID or not PAGE_TOKEN:
 # Functions
 # ----------------------
 def get_current_live_video():
-    """
-    Returns the current live video ID for the Page, or None if no live video is active.
-    """
     url = f"https://graph.facebook.com/v18.0/{PAGE_ID}/live_videos"
     params = {"status": "LIVE_NOW", "access_token": PAGE_TOKEN}
     
-    try:
-        resp = requests.get(url, params=params).json()
-    except Exception as e:
-        print("Error fetching live video:", e)
-        return None
-    
-    # Debug output
-    # print("Live video API response:", resp)
-    
+    resp = requests.get(url, params=params).json()
     if "data" in resp and resp["data"]:
         return resp["data"][0]["id"]
     return None
 
-def fetch_comments(video_id, seen_ids=set()):
+def fetch_new_comments(video_id, seen_ids):
     """
-    Fetches comments for a live video and prints/logs new ones.
+    Fetches only new comments since last fetch.
     """
     url = f"https://graph.facebook.com/v18.0/{video_id}/comments"
-    params = {"order": "reverse_chronological", "access_token": PAGE_TOKEN}
+    params = {
+        "order": "chronological",  # oldest first
+        "access_token": PAGE_TOKEN,
+        "limit": 50  # max per request
+    }
+    resp = requests.get(url, params=params).json()
     
-    try:
-        resp = requests.get(url, params=params).json()
-    except Exception as e:
-        print("Error fetching comments:", e)
-        return seen_ids
-
     for comment in resp.get("data", []):
         cid = comment["id"]
         if cid not in seen_ids:
@@ -62,16 +50,25 @@ def fetch_comments(video_id, seen_ids=set()):
 # Main loop
 # ----------------------
 def main():
-    seen = set()
+    seen_ids = set()
+    last_video_id = None
+
     print("Starting Facebook Live chat fetcher...")
 
     while True:
         video_id = get_current_live_video()
         if video_id:
-            print(f"Connected to Facebook live video: {video_id}")
-            seen = fetch_comments(video_id, seen)
+            if video_id != last_video_id:
+                print(f"Connected to Facebook live video: {video_id}")
+                seen_ids.clear()  # reset seen comments for new video
+                last_video_id = video_id
+
+            seen_ids = fetch_new_comments(video_id, seen_ids)
         else:
             print("No live video currently.")
+            last_video_id = None
+            seen_ids.clear()
+        
         time.sleep(POLL_INTERVAL)
 
 if __name__ == "__main__":
