@@ -25,6 +25,9 @@ def get_current_live_video():
     params = {"status": "LIVE_NOW", "access_token": PAGE_TOKEN}
     resp = requests.get(url, params=params).json()
     
+    # Debug output
+    print("Live video API response:", resp)
+    
     if "data" in resp and resp["data"]:
         return resp["data"][0]["id"]
     return None
