@@ -4,113 +4,88 @@ import requests
 from datetime import datetime, timedelta
 from kickapi import KickAPI
 import re
-import emoji  # <-- NEW (pip install emoji)
 
 # --- Config ---
-KICK_CHANNEL = os.getenv("KICK_CHANNEL", "default_channel")  # Set default channel if not provided
-NTFY_TOPIC = os.getenv("NTFY_TOPIC", "kick-chat-notifications")  # Set default NTFY topic
-POLL_INTERVAL = 5  # Polling interval in seconds
-TIME_WINDOW_MINUTES = 0.01  # Time window for fetching messages (e.g., last 5 minutes)
+KICK_CHANNEL = os.getenv("KICK_CHANNEL", "default_channel")
+NTFY_TOPIC = os.getenv("NTFY_TOPIC", "kick-chat-notifications")
+POLL_INTERVAL = 3
+TIME_WINDOW_MINUTES = 0.01
 
-if not KICK_CHANNEL:
-    raise ValueError("Please set KICK_CHANNEL environment variable")
+# Load BTTV global emotes
+BTTV_EMOTES = {}
+try:
+    resp = requests.get("https://api.betterttv.net/3/cached/emotes/global")
+    for e in resp.json():
+        BTTV_EMOTES[e['emote']['code']] = e['emote']['id']
+except:
+    pass
 
-kick_api = KickAPI()
-
-# --- Regex Pattern for Kick emotes ---
+# Emote pattern
 emoji_pattern = r"\[emote:(\d+):([^\]]+)\]"
 
 def extract_emojis(text: str):
-    """Replace Kick emote codes with Unicode when possible, otherwise keep name and record URLs."""
+    """Extract Kick emotes and BTTV matches; return text + image URLs list."""
     emote_urls = []
     matches = re.findall(emoji_pattern, text)
     for emote_id, emote_name in matches:
-        emote_url = f"https://files.kick.com/emotes/{emote_id}/fullsize"
-        emote_urls.append(emote_url)
+        kick_url = f"https://files.kick.com/emotes/{emote_id}/fullsize"
+        emote_urls.append(kick_url)
+        # Replace placeholder text
+        text = text.replace(f"[emote:{emote_id}:{emote_name}]", f"[{emote_name}]")
 
-        # Try to match with Unicode emoji using python-emoji
-        unicode_char = emoji.emojize(f":{emote_name.lower()}:", language="alias")
-
-        if unicode_char != f":{emote_name.lower()}:":  # Found Unicode emoji
-            replacement = unicode_char
-        else:
-            replacement = f"[{emote_name}]"  # fallback placeholder
-
-        text = text.replace(f"[emote:{emote_id}:{emote_name}]", replacement)
+        # If BTTV also has this emote, add its image URL
+        bttv_id = BTTV_EMOTES.get(emote_name)
+        if bttv_id:
+            bttv_url = f"https://cdn.betterttv.net/emote/{bttv_id}/3x"
+            emote_urls.append(bttv_url)
 
     return text, emote_urls
 
 def send_ntfy(user, msg, emotes):
-    """Send chat message notifications to NTFY."""
-    try:
+    headers = {"Title": "Kick"}
+    if emotes:
+        headers["Attach"] = emotes[0]
+        # Append additional emote URLs to message text
+        formatted_msg = f"{user}: {msg} " + " ".join(emotes[1:])
+    else:
         formatted_msg = f"{user}: {msg}"
-        headers = { "Title": "Kick" }
-
-        # If there are Kick emote image URLs, attach the first one
-        if emotes:
-            headers["Attach"] = emotes[0]
-
-        requests.post(
-            f"https://ntfy.sh/{NTFY_TOPIC}",
-            data=formatted_msg.encode("utf-8"),
-            headers=headers
-        )
-    except Exception as e:
-        print("⚠️ Failed to send NTFY:", e)
+    requests.post(f"https://ntfy.sh/{NTFY_TOPIC}", data=formatted_msg.encode(), headers=headers)
 
 def get_live_chat():
-    """Fetch live chat messages for the given channel."""
     try:
         channel = kick_api.channel(KICK_CHANNEL)
         if not channel:
             return None
-
-        past_time = datetime.utcnow() - timedelta(minutes=TIME_WINDOW_MINUTES)
-        formatted_time = past_time.strftime('%Y-%m-%dT%H:%M:%S.000Z')
-
-        chat = kick_api.chat(channel.id, formatted_time)
+        past = (datetime.utcnow() - timedelta(minutes=TIME_WINDOW_MINUTES)).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+        chat = kick_api.chat(channel.id, past)
         messages = []
-
-        if chat and hasattr(chat, 'messages') and chat.messages:
-            for msg in chat.messages:
-                message_text = msg.text if hasattr(msg, 'text') else 'No text'
-                message_text, emote_urls = extract_emojis(message_text)
-
+        if chat and hasattr(chat, 'messages'):
+            for m in chat.messages:
+                txt = m.text if hasattr(m, 'text') else 'No text'
+                txt, urls = extract_emojis(txt)
                 messages.append({
-                    'username': msg.sender.username if hasattr(msg, 'sender') else 'Unknown',
-                    'text': message_text,
-                    'emotes': emote_urls,
-                    'timestamp': datetime.now().strftime('%H:%M:%S'),
-                    'channel': channel.username
+                    'username': m.sender.username if hasattr(m, 'sender') else 'Unknown',
+                    'text': txt,
+                    'emotes': urls,
+                    'timestamp': datetime.now().strftime('%H:%M:%S')
                 })
-
         return messages
-    except Exception:
+    except:
         return None
 
 def listen_live_chat():
-    """Fetch and listen to live chat for the channel."""
-    last_fetched_messages = set()
-    last_sent_time = time.time()
-
+    last_seen = set()
+    last_sent = time.time()
     while True:
-        messages = get_live_chat()
-        if not messages:
-            time.sleep(10)
-            continue
-
-        for msg in messages:
-            msg_id = f"{msg['username']}:{msg['text']}"
-
-            if msg_id not in last_fetched_messages:
-                if time.time() - last_sent_time >= 5:
-                    # Console log
+        msgs = get_live_chat()
+        if msgs:
+            for msg in msgs:
+                msg_id = f"{msg['username']}:{msg['text']}"
+                if msg_id not in last_seen and time.time() - last_sent >= 5:
                     print(f"[{msg['timestamp']}] {msg['username']}: {msg['text']}")
-                    # Send to NTFY
                     send_ntfy(msg['username'], msg['text'], msg['emotes'])
-                    last_fetched_messages.add(msg_id)
-                    last_sent_time = time.time()
-
+                    last_seen.add(msg_id)
+                    last_sent = time.time()
         time.sleep(POLL_INTERVAL)
 
 if __name__ == "__main__":
