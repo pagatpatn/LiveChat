@@ -10,6 +10,7 @@ KICK_CHANNEL = os.getenv("KICK_CHANNEL", "default_channel")
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "kick-chat-notifications")
 POLL_INTERVAL = 5  # how often to poll Kick for new messages
 TIME_WINDOW_MINUTES = 0.1  # how far back to fetch messages each poll
+MESSAGE_DELAY = int(os.getenv("MESSAGE_DELAY", 5))  # delay in seconds between sending to NTFY
 
 if not KICK_CHANNEL:
     raise ValueError("Please set KICK_CHANNEL environment variable")
@@ -72,12 +73,13 @@ def get_live_chat(channel_id: int):
         return []
 
 def listen_live_chat():
-    """Listen to live chat and send messages with 5s delay between each."""
+    """Listen to live chat and send messages with configurable delay to NTFY."""
     channel = kick_api.channel(KICK_CHANNEL)
     if not channel:
         raise ValueError(f"Channel '{KICK_CHANNEL}' not found")
 
     print(f"✅ Connected to Kick chat for channel: {channel.username}")
+    print(f"⏱ Message delay between NTFY sends: {MESSAGE_DELAY} seconds")
 
     seen_ids = set()
     queue = []
@@ -90,12 +92,14 @@ def listen_live_chat():
             if msg["id"] not in seen_ids:
                 seen_ids.add(msg["id"])
                 queue.append(msg)
+                # Log immediately when captured
+                print(f"[{msg['timestamp']}] {msg['username']}: {msg['text']} (queued)")
 
-        # 2. If 5s passed and queue has messages, send the next one
-        if queue and (time.time() - last_sent_time >= 5):
+        # 2. If delay passed and queue has messages, send the next one
+        if queue and (time.time() - last_sent_time >= MESSAGE_DELAY):
             msg = queue.pop(0)  # FIFO
-            print(f"[{msg['timestamp']}] {msg['username']}: {msg['text']}")
             send_ntfy(msg["username"], msg["text"])
+            print(f"📤 Sent to NTFY: {msg['username']}: {msg['text']}")
             last_sent_time = time.time()
 
         time.sleep(1)  # check every second
