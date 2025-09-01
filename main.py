@@ -18,15 +18,19 @@ if not PAGE_ID or not PAGE_TOKEN:
 # ----------------------
 def get_current_live_video():
     """
-    Returns the current live video ID for the Page,
-    or None if no live video is active.
+    Returns the current live video ID for the Page, or None if no live video is active.
     """
     url = f"https://graph.facebook.com/v18.0/{PAGE_ID}/live_videos"
     params = {"status": "LIVE_NOW", "access_token": PAGE_TOKEN}
-    resp = requests.get(url, params=params).json()
+    
+    try:
+        resp = requests.get(url, params=params).json()
+    except Exception as e:
+        print("Error fetching live video:", e)
+        return None
     
     # Debug output
-    print("Live video API response:", resp)
+    # print("Live video API response:", resp)
     
     if "data" in resp and resp["data"]:
         return resp["data"][0]["id"]
@@ -34,12 +38,17 @@ def get_current_live_video():
 
 def fetch_comments(video_id, seen_ids=set()):
     """
-    Fetches comments for a live video and prints new ones.
+    Fetches comments for a live video and prints/logs new ones.
     """
     url = f"https://graph.facebook.com/v18.0/{video_id}/comments"
     params = {"order": "reverse_chronological", "access_token": PAGE_TOKEN}
-    resp = requests.get(url, params=params).json()
     
+    try:
+        resp = requests.get(url, params=params).json()
+    except Exception as e:
+        print("Error fetching comments:", e)
+        return seen_ids
+
     for comment in resp.get("data", []):
         cid = comment["id"]
         if cid not in seen_ids:
@@ -55,10 +64,11 @@ def fetch_comments(video_id, seen_ids=set()):
 def main():
     seen = set()
     print("Starting Facebook Live chat fetcher...")
-    
+
     while True:
         video_id = get_current_live_video()
         if video_id:
+            print(f"Connected to Facebook live video: {video_id}")
             seen = fetch_comments(video_id, seen)
         else:
             print("No live video currently.")
