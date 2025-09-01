@@ -1,7 +1,6 @@
-KickApi
-websocket-client
 Flask
 selenium
-requests
+undetected-chromedriver
+
 
 
