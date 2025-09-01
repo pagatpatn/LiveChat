@@ -1,6 +1,5 @@
 from flask import Flask, jsonify
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
+import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 import threading
 import time
@@ -21,12 +20,13 @@ if not PAGE_URL:
 # ----------------------
 # Selenium setup
 # ----------------------
-options = Options()
-options.add_argument("--headless")  # run in background
+options = uc.ChromeOptions()
+options.add_argument("--headless")
 options.add_argument("--disable-gpu")
 options.add_argument("--no-sandbox")
+options.add_argument("--disable-dev-shm-usage")
 
-driver = webdriver.Chrome(options=options)
+driver = uc.Chrome(options=options)
 driver.get(PAGE_URL)
 time.sleep(5)
 
