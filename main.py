@@ -4,22 +4,22 @@ import requests
 from datetime import datetime, timedelta
 from kickapi import KickAPI
 import re
+import base64
+import sys
 
 # --- Config ---
-KICK_CHANNEL = os.getenv("KICK_CHANNEL", "default_channel")  # Set default channel if not provided
-NTFY_TOPIC = os.getenv("NTFY_TOPIC", "kick-chat-notifications")  # Set default NTFY topic
-POLL_INTERVAL = 5  # Polling interval in seconds
-TIME_WINDOW_MINUTES = 0.01  # Time window for fetching messages
+KICK_CHANNEL = os.getenv("KICK_CHANNEL", "default_channel")
+NTFY_TOPIC = os.getenv("NTFY_TOPIC", "kick-chat-notifications")
+POLL_INTERVAL = 5
+TIME_WINDOW_MINUTES = 0.01
 
 if not KICK_CHANNEL:
     raise ValueError("Please set KICK_CHANNEL environment variable")
 
 kick_api = KickAPI()
 
-# --- Regex Pattern for Kick emotes ---
 emoji_pattern = r"\[emote:(\d+):([^\]]+)\]"
 
-# --- Global emote dictionary (BTTV, FFZ, 7TV) ---
 global_emotes = {}
 
 def load_global_emotes():
@@ -40,7 +40,6 @@ def load_global_emotes():
         for set_id, data in ffz["sets"].items():
             for e in data["emoticons"]:
                 urls = e["urls"]
-                # Pick largest available size
                 url = urls.get("4") or urls.get("2") or urls.get("1")
                 global_emotes[e["name"]] = url
 
@@ -53,14 +52,14 @@ def extract_emojis(text: str):
     """Replace emote codes with image URLs for Kick and global emotes."""
     emote_urls = []
 
-    # Handle Kick native emotes
+    # Kick emotes
     matches = re.findall(emoji_pattern, text)
     for emote_id, emote_name in matches:
         emote_url = f"https://files.kick.com/emotes/{emote_id}/fullsize"
         emote_urls.append(emote_url)
         text = text.replace(f"[emote:{emote_id}:{emote_name}]", emote_url)
 
-    # Handle global emotes like [KEKW]
+    # Global emotes [KEKW]
     bracketed = re.findall(r"\[([A-Za-z0-9_]+)\]", text)
     for name in bracketed:
         if name in global_emotes:
@@ -71,13 +70,35 @@ def extract_emojis(text: str):
     return text.strip(), emote_urls
 
 
+def print_with_images(username, msg, emotes):
+    """Print message with inline images if supported, otherwise URLs."""
+    sys.stdout.reconfigure(encoding='utf-8')
+    rendered = f"{username}: {msg}"
+
+    for url in emotes:
+        try:
+            # Fetch image
+            resp = requests.get(url, timeout=5)
+            if resp.status_code == 200:
+                img_data = base64.b64encode(resp.content).decode("utf-8")
+
+                # iTerm2/kitty inline image escape sequence
+                inline_img = f"\033]1337;File=inline=1;width=auto;height=auto;preserveAspectRatio=1:{img_data}\a"
+                rendered += " " + inline_img
+            else:
+                rendered += " " + url
+        except Exception:
+            rendered += " " + url
+
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {rendered}")
+
+
 def send_ntfy(user, msg, emotes):
     """Send chat message notifications to NTFY."""
     try:
         formatted_msg = f"{user}: {msg}"
         headers = {"Title": "Kick"}
 
-        # If there are emote image URLs, attach first one
         if emotes:
             headers["Attach"] = emotes[0]
             if len(emotes) > 1:
@@ -93,7 +114,6 @@ def send_ntfy(user, msg, emotes):
 
 
 def get_live_chat():
-    """Fetch live chat messages for the given channel."""
     try:
         channel = kick_api.channel(KICK_CHANNEL)
         if not channel:
@@ -125,7 +145,6 @@ def get_live_chat():
 
 
 def listen_live_chat():
-    """Fetch and listen to live chat for the channel."""
     last_fetched_messages = set()
     last_sent_time = time.time()
 
@@ -141,8 +160,7 @@ def listen_live_chat():
 
             if msg_id not in last_fetched_messages:
                 if time.time() - last_sent_time >= 5:
-                    # Console shows image URLs now
-                    print(f"[{msg['timestamp']}] {msg['username']}: {msg['text']}")
+                    print_with_images(msg['username'], msg['text'], msg['emotes'])
                     send_ntfy(msg['username'], msg['text'], msg['emotes'])
                     last_fetched_messages.add(msg_id)
                     last_sent_time = time.time()
