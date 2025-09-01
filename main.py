@@ -5,110 +5,106 @@ from datetime import datetime, timedelta
 from kickapi import KickAPI
 import re
 
-# --- Config ---
-KICK_CHANNEL = os.getenv("KICK_CHANNEL", "default_channel")  # Set default channel if not provided
-NTFY_TOPIC = os.getenv("NTFY_TOPIC", "kick-chat-notifications")  # Set default NTFY topic
-POLL_INTERVAL = 5  # Polling interval in seconds
-TIME_WINDOW_MINUTES = 0.01  # Time window for fetching messages
+# 🔑 Your details
+KICK_CHANNEL = os.getenv("KICK_CHANNEL", "shortypie")  # Kick username
+NTFY_TOPIC = "https://ntfy.sh/streamchats123"    # replace with your ntfy topic
+NTFY_DELAY = 2                                   # seconds between notifications
 
-if not KICK_CHANNEL:
-    raise ValueError("Please set KICK_CHANNEL environment variable")
+# Track sent messages to prevent duplicates
+sent_messages = set()
 
 kick_api = KickAPI()
 
-# --- Regex Pattern for Kick emotes ---
+# Regex for Kick emotes
 emoji_pattern = r"\[emote:(\d+):([^\]]+)\]"
 
+def send_ntfy_notification(title, message, emotes=None):
+    """Send a banner notification via NTFY."""
+    try:
+        headers = {
+            "Title": title,
+            "Priority": "high",
+        }
+        if emotes:
+            headers["Attach"] = emotes[0]  # attach first emote image
+
+        requests.post(
+            NTFY_TOPIC,
+            data=message.encode("utf-8"),
+            headers=headers,
+            timeout=5
+        )
+        time.sleep(NTFY_DELAY)
+    except Exception as e:
+        print("❌ Failed to send NTFY notification:", e)
+
 def extract_emojis(text: str):
-    """Replace Kick emote codes with readable names and collect image URLs."""
+    """Replace Kick emotes with readable names and collect image URLs."""
     emote_urls = []
     matches = re.findall(emoji_pattern, text)
     for emote_id, emote_name in matches:
-        # Build Kick emote URL
         emote_url = f"https://files.kick.com/emotes/{emote_id}/fullsize"
         emote_urls.append(emote_url)
-        # Replace with readable placeholder
         text = text.replace(f"[emote:{emote_id}:{emote_name}]", f"[{emote_name}]")
     return text, emote_urls
 
-def send_ntfy(user, msg, emotes):
-    """Send chat message notifications to NTFY."""
-    try:
-        formatted_msg = f"{user}: {msg}"
-        headers = {"Title": "Kick"}
-
-        # If there are Kick emote image URLs, attach the first one
-        if emotes:
-            headers["Attach"] = emotes[0]
-
-        requests.post(
-            f"https://ntfy.sh/{NTFY_TOPIC}",
-            data=formatted_msg.encode("utf-8"),
-            headers=headers
-        )
-    except Exception as e:
-        print("⚠️ Failed to send NTFY:", e)
-
-def get_live_chat():
-    """Fetch live chat messages for the given channel."""
+def get_live_channel():
+    """Check if channel is live. Return channel object or None."""
     try:
         channel = kick_api.channel(KICK_CHANNEL)
-        if not channel:
-            return None
-
-        past_time = datetime.utcnow() - timedelta(minutes=TIME_WINDOW_MINUTES)
-        formatted_time = past_time.strftime('%Y-%m-%dT%H:%M:%S.000Z')
-
-        chat = kick_api.chat(channel.id, formatted_time)
-        messages = []
-
-        if chat and hasattr(chat, 'messages') and chat.messages:
-            for msg in chat.messages:
-                message_text = msg.text if hasattr(msg, 'text') else 'No text'
-                # Extract emojis and their URLs
-                message_text, emote_urls = extract_emojis(message_text)
-
-                messages.append({
-                    'username': msg.sender.username if hasattr(msg, 'sender') else 'Unknown',
-                    'text': message_text,
-                    'emotes': emote_urls,
-                    'timestamp': datetime.now().strftime('%H:%M:%S'),
-                    'channel': channel.username
-                })
-
-        return messages
-    except Exception:
+        if channel and channel.livestream and channel.livestream.id:
+            return channel
+        return None
+    except Exception as e:
+        print("❌ Error checking live status:", e)
         return None
 
-def listen_live_chat():
-    """Fetch and listen to live chat for the channel."""
-    last_fetched_messages = set()
-    last_sent_time = time.time()
+def listen_to_chat(channel):
+    """Poll Kick chat messages in realtime until stream ends."""
+    print(f"✅ Connected to Kick live chat for {channel.username}!")
+    last_check = datetime.utcnow()
 
     while True:
-        messages = get_live_chat()
-        
-        if not messages:
-            time.sleep(10)
-            continue
+        try:
+            # fetch messages from last few seconds
+            past_time = last_check.strftime('%Y-%m-%dT%H:%M:%S.000Z')
+            chat = kick_api.chat(channel.id, past_time)
+            last_check = datetime.utcnow()
 
-        for msg in messages:
-            msg_id = f"{msg['username']}:{msg['text']}"
+            if chat and hasattr(chat, "messages") and chat.messages:
+                for msg in chat.messages:
+                    msg_id = getattr(msg, "id", None)
+                    if not msg_id or msg_id in sent_messages:
+                        continue
 
-            if msg_id not in last_fetched_messages:
-                if time.time() - last_sent_time >= 5:
-                    # Console log with emote URLs shown
-                    if msg['emotes']:
-                        print(f"[{msg['timestamp']}] {msg['username']}: {msg['text']} {', '.join(msg['emotes'])}")
-                    else:
-                        print(f"[{msg['timestamp']}] {msg['username']}: {msg['text']}")
-                    
-                    # Send to NTFY with emotes attached
-                    send_ntfy(msg['username'], msg['text'], msg['emotes'])
-                    last_fetched_messages.add(msg_id)
-                    last_sent_time = time.time()
-        
-        time.sleep(POLL_INTERVAL)
+                    sent_messages.add(msg_id)
+                    user = msg.sender.username if hasattr(msg, "sender") else "Unknown"
+                    text = msg.text if hasattr(msg, "text") else ""
+                    text, emotes = extract_emojis(text)
+
+                    print(f"[Kick] {user}: {text}")
+
+                    send_ntfy_notification(
+                        title=f"New chat from {user}",
+                        message=text,
+                        emotes=emotes
+                    )
+
+            time.sleep(2)  # small poll interval
+
+        except Exception as e:
+            print("❌ Exception while polling chat:", e)
+            time.sleep(5)
+            return  # stop loop and retry outside
 
 if __name__ == "__main__":
-    listen_live_chat()
+    while True:
+        print(f"🔍 Checking if {KICK_CHANNEL} is live...")
+        channel = get_live_channel()
+        if channel:
+            print("🎥 Live stream found! Starting chat listener...")
+            listen_to_chat(channel)
+            print("ℹ️ Stream ended or error. Rechecking in 10s...")
+        else:
+            print("⏳ Not live. Retrying in 10s...")
+            time.sleep(10)
