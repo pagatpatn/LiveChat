@@ -9,33 +9,42 @@ import re
 KICK_CHANNEL = os.getenv("KICK_CHANNEL", "default_channel")
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "kick-chat-notifications")
 POLL_INTERVAL = 5
-TIME_WINDOW_MINUTES = 0.05
+TIME_WINDOW_MINUTES = 0.01
 
 if not KICK_CHANNEL:
     raise ValueError("Please set KICK_CHANNEL environment variable")
 
 kick_api = KickAPI()
 
-# Extract emote patterns
+# --- Emoji / Emote Handling ---
 emoji_pattern = r"\[emote:(\d+):([^\]]+)\]"
 
 def extract_emojis(text: str):
-    """Extract Kick emote placeholders, return cleaned text + list of image URLs."""
+    """
+    Replace [emote:id:name] with a readable name and collect the emote's
+    image URLs for display via NTFY Attach header.
+    """
     matches = re.findall(emoji_pattern, text)
     emote_urls = []
     for emote_id, emote_name in matches:
+        # Replace in-text with [NAME]
+        placeholder = f"[emote:{emote_id}:{emote_name}]"
+        display = f"[{emote_name}]"
+        text = text.replace(placeholder, display)
+        # Build URL to the full-size Kick emote
         emote_urls.append(f"https://files.kick.com/emotes/{emote_id}/fullsize")
-        # Replace placeholder with readable name
-        text = text.replace(f"[emote:{emote_id}:{emote_name}]", f"[{emote_name}]")
     return text, emote_urls
 
 def send_ntfy(user, msg, emote_urls=None):
-    """Send message to NTFY and attach the first emote image if available."""
+    """
+    Send chat message to NTFY with optional emote image via 'Attach' header.
+    The image will appear if the client supports it.
+    """
+    headers = {"Title": "Kick"}
+    if emote_urls:
+        headers["Attach"] = emote_urls[0]  # NTFY supports a single image attachment
+    formatted_msg = f"{user}: {msg}"
     try:
-        formatted_msg = f"{user}: {msg}"
-        headers = {"Title": "Kick"}
-        if emote_urls:
-            headers["Attach"] = emote_urls[0]
         requests.post(
             f"https://ntfy.sh/{NTFY_TOPIC}",
             data=formatted_msg.encode("utf-8"),
@@ -44,48 +53,48 @@ def send_ntfy(user, msg, emote_urls=None):
     except Exception as e:
         print("⚠️ Failed to send NTFY:", e)
 
+# --- Fetch Live Chat ---
 def get_live_chat():
-    """Fetch live messages and process emotes."""
     try:
         channel = kick_api.channel(KICK_CHANNEL)
         if not channel:
             return None
-
-        past = (datetime.utcnow() - timedelta(minutes=TIME_WINDOW_MINUTES)).strftime('%Y-%m-%dT%H:%M:%S.000Z')
-        chat = kick_api.chat(channel.id, past)
-        messages = []
-        if chat and hasattr(chat, 'messages') and chat.messages:
+        
+        past = datetime.utcnow() - timedelta(minutes=TIME_WINDOW_MINUTES)
+        ts = past.strftime('%Y-%m-%dT%H:%M:%S.000Z')
+        chat = kick_api.chat(channel.id, ts)
+        results = []
+        if chat and hasattr(chat, 'messages'):
             for msg in chat.messages:
-                text = msg.text if hasattr(msg, 'text') else 'No text'
-                text, emotes = extract_emojis(text)
-                messages.append({
+                txt = msg.text if hasattr(msg, 'text') else 'No text'
+                txt, emotes = extract_emojis(txt)
+                results.append({
                     'username': msg.sender.username if hasattr(msg, 'sender') else 'Unknown',
-                    'text': text,
+                    'text': txt,
                     'emotes': emotes,
                     'timestamp': datetime.now().strftime('%H:%M:%S'),
-                    'channel': channel.username
                 })
-        return messages
-    except:
+        return results
+    except Exception:
         return None
 
+# --- Listen Live Chat ---
 def listen_live_chat():
-    """Continuously listen for new messages and notify accordingly."""
-    last_fetched = set()
+    last_msgs = set()
     last_sent = time.time()
 
     while True:
-        msgs = get_live_chat()
-        if not msgs:
+        messages = get_live_chat()
+        if not messages:
             time.sleep(10)
             continue
 
-        for msg in msgs:
-            msg_id = f"{msg['username']}:{msg['text']}"
-            if msg_id not in last_fetched and time.time() - last_sent >= 5:
-                print(f"[{msg['timestamp']}] {msg['username']}: {msg['text']}")
-                send_ntfy(msg['username'], msg['text'], msg.get('emotes'))
-                last_fetched.add(msg_id)
+        for m in messages:
+            mid = f"{m['username']}:{m['text']}"
+            if mid not in last_msgs and time.time() - last_sent >= 5:
+                print(f"[{m['timestamp']}] {m['username']}: {m['text']}")
+                send_ntfy(m['username'], m['text'], m.get('emotes'))
+                last_msgs.add(mid)
                 last_sent = time.time()
 
         time.sleep(POLL_INTERVAL)
