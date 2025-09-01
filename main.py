@@ -21,10 +21,11 @@ if not PAGE_URL:
 # Selenium setup
 # ----------------------
 options = uc.ChromeOptions()
-options.add_argument("--headless")
+options.add_argument("--headless=new")  # fixed headless mode
 options.add_argument("--disable-gpu")
 options.add_argument("--no-sandbox")
 options.add_argument("--disable-dev-shm-usage")
+options.add_argument("--remote-allow-origins=*")
 
 driver = uc.Chrome(options=options)
 driver.get(PAGE_URL)
@@ -46,7 +47,7 @@ def poll_facebook_chat():
 
     while True:
         try:
-            # Check if a live video exists
+            # Find live video element
             live_elems = driver.find_elements(By.XPATH, '//a[contains(@aria-label, "LIVE")]')
             if live_elems:
                 live_url = live_elems[0].get_attribute("href")
