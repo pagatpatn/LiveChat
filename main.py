@@ -5,19 +5,20 @@ import json
 
 GRAPH = "https://graph.facebook.com/v20.0"
 
-# ✅ Use the *same* env var names as your working setup
+# ✅ Environment variables
 PAGE_TOKEN = os.getenv("FB_PAGE_TOKEN")
 PAGE_ID = os.getenv("FB_PAGE_ID")
 
 if not PAGE_TOKEN or not PAGE_ID:
     raise ValueError("❌ Missing env vars: FB_PAGE_TOKEN, FB_PAGE_ID")
 
-# Track comment IDs we've already printed
+# Track seen comment IDs and last message per user
 seen_comment_ids = set()
+last_message_by_user = {}
 
 
 def safe_request(url, params):
-    """GET with basic error handling."""
+    """GET with error handling."""
     try:
         res = requests.get(url, params=params, timeout=15)
         data = res.json()
@@ -31,10 +32,7 @@ def safe_request(url, params):
 
 
 def get_live_video(page_id, page_token):
-    """
-    Find the currently LIVE video using /{page_id}/videos.
-    This avoids the live-video-api endpoints completely.
-    """
+    """Find currently LIVE video using /{page_id}/videos."""
     url = f"{GRAPH}/{page_id}/videos"
     params = {
         "fields": "id,description,live_status,created_time",
@@ -58,8 +56,8 @@ def get_live_video(page_id, page_token):
 
 def fetch_new_comments(video_id, page_token):
     """
-    Pull the most recent comments and return only ones we haven't printed yet.
-    No 'since' param needed — we dedupe by comment ID.
+    Fetch new comments, deduplicate by ID,
+    and prevent spam (same user + same message).
     """
     url = f"{GRAPH}/{video_id}/comments"
     params = {
@@ -67,7 +65,6 @@ def fetch_new_comments(video_id, page_token):
         "order": "reverse_chronological",  # newest first
         "access_token": page_token,
         "limit": 25,
-        # You can optionally add: "filter": "toplevel"
     }
     res = safe_request(url, params)
     items = res.get("data", [])
@@ -79,11 +76,21 @@ def fetch_new_comments(video_id, page_token):
         cid = c.get("id")
         if not cid:
             continue
-        if cid not in seen_comment_ids:
-            seen_comment_ids.add(cid)
-            fresh.append(c)
+        if cid in seen_comment_ids:
+            continue
 
-    # Print from oldest to newest
+        user = c.get("from", {}).get("name", "Unknown")
+        msg = c.get("message", "")
+
+        # 🚫 Prevent spam: skip if same user repeated same message
+        if last_message_by_user.get(user) == msg:
+            continue
+
+        seen_comment_ids.add(cid)
+        last_message_by_user[user] = msg
+        fresh.append(c)
+
+    # Oldest first
     fresh.reverse()
     return fresh
 
@@ -110,7 +117,7 @@ def main():
             ts = c.get("created_time", "")
             print(f"[{ts}] {user}: {msg}")
 
-        time.sleep(5)
+        time.sleep(2)  # ⏱ Faster refresh for near real-time
 
 
 if __name__ == "__main__":
