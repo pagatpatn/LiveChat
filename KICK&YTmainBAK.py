@@ -6,7 +6,7 @@ import threading
 from datetime import datetime, timedelta
 from kickapi import KickAPI
 
-# --- Config (from env vars for Railway) ----
+# --- Config (from env vars for Railway) ---
 KICK_CHANNEL = os.getenv("KICK_CHANNEL", "")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
 YOUTUBE_CHANNEL_ID = os.getenv("YOUTUBE_CHANNEL_ID", "")
