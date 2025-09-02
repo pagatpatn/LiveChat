@@ -1,12 +1,15 @@
 import os
-import time
 import requests
 import json
-from datetime import datetime
+import time
 
-# 🔑 Load from environment variables
+# 🔑 Environment variables (set these in Railway)
 PAGE_ID = os.getenv("FB_PAGE_ID")
-PAGE_TOKEN = os.getenv("FB_PAGE_TOKEN")  # Permanent token
+PAGE_TOKEN = os.getenv("FB_PAGE_TOKEN")
+
+if not PAGE_ID or not PAGE_TOKEN:
+    raise ValueError("❌ Missing required environment variables: FB_PAGE_ID, FB_PAGE_TOKEN")
+
 
 def get_live_video(page_id, page_token):
     """Fetch active live video for the page"""
@@ -14,7 +17,7 @@ def get_live_video(page_id, page_token):
     url = f"https://graph.facebook.com/v20.0/{page_id}/live_videos"
     params = {
         "fields": "id,title,status,creation_time",
-        "broadcast_status": "LIVE",
+        "broadcast_status": ["LIVE"],  # ✅ must be array
         "access_token": page_token,
         "limit": 5
     }
@@ -32,55 +35,47 @@ def get_live_video(page_id, page_token):
     print(f"✅ Live video found: {live_video['id']} | {live_video.get('title', '(no title)')}")
     return live_video["id"]
 
-def get_live_comments(video_id, page_token, last_timestamp=None):
-    """Fetch live comments from a live video"""
+
+def get_live_comments(video_id, page_token, since_time=None):
+    """Fetch live video comments"""
     url = f"https://graph.facebook.com/v20.0/{video_id}/comments"
     params = {
         "fields": "from{name},message,created_time",
         "order": "chronological",
         "access_token": page_token,
+        "filter": "toplevel",
         "limit": 10
     }
-
-    # ✅ Only add since if we already have a timestamp
-    if last_timestamp:
-        params["since"] = int(last_timestamp)
+    if since_time:
+        params["since"] = since_time
 
     res = requests.get(url, params=params).json()
     if "error" in res:
         print(f"⚠️ API Error fetching comments: {json.dumps(res, indent=2)}")
         return []
 
-    comments = res.get("data", [])
-    if comments:
-        print("💬 Latest comments:")
-        for c in comments:
-            user = c.get("from", {}).get("name", "Unknown")
-            msg = c.get("message", "")
-            ts = c.get("created_time")
-            print(f"[{ts}] {user}: {msg}")
+    return res.get("data", [])
 
-    return comments
 
 if __name__ == "__main__":
-    if not PAGE_ID or not PAGE_TOKEN:
-        raise ValueError("❌ Missing required env variables: FB_PAGE_ID, FB_PAGE_TOKEN")
-
-    live_video_id = get_live_video(PAGE_ID, PAGE_TOKEN)
-    if not live_video_id:
+    video_id = get_live_video(PAGE_ID, PAGE_TOKEN)
+    if not video_id:
         exit(1)
 
-    print(f"🎯 Active live video ID: {live_video_id}")
+    print(f"🎯 Active live video ID: {video_id}")
 
-    last_timestamp = None
-
-    # 🔁 Keep polling every 10 seconds
+    # Start polling comments
+    last_timestamp = int(time.time())
     while True:
-        comments = get_live_comments(live_video_id, PAGE_TOKEN, last_timestamp)
-
-        # Update last_timestamp with the latest comment
+        comments = get_live_comments(video_id, PAGE_TOKEN, since_time=last_timestamp)
         if comments:
-            last_time_str = comments[-1]["created_time"]
-            last_timestamp = int(datetime.fromisoformat(last_time_str.replace("Z", "+00:00")).timestamp())
+            for c in comments:
+                user = c["from"]["name"]
+                msg = c["message"]
+                ts = c["created_time"]
+                print(f"[{ts}] {user}: {msg}")
 
-        time.sleep(10)
+            # Update timestamp so we only get new comments
+            last_timestamp = int(time.time())
+
+        time.sleep(5)
