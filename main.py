@@ -1,57 +1,43 @@
 import requests
-import time
+import json
 
-PAGE_ID = "110575327401854"  # 👈 Your Page ID
-ACCESS_TOKEN = "YOUR_PAGE_ACCESS_TOKEN"
-GRAPH_URL = "https://graph.facebook.com/v19.0"
+# 👇 replace with your Page Access Token (not user token)
+PAGE_ACCESS_TOKEN = "YOUR_PAGE_ACCESS_TOKEN"
+PAGE_ID = "110575327401854"  # Last Move Gaming
 
-def test_live_video_methods():
-    endpoints = [
-        {
-            "name": "/live_videos",
-            "url": f"{GRAPH_URL}/{PAGE_ID}/live_videos",
-            "params": {
-                "fields": "id,status,live_status,title,created_time",
-                "access_token": ACCESS_TOKEN
-            }
-        },
-        {
-            "name": "/videos?type=live",
-            "url": f"{GRAPH_URL}/{PAGE_ID}/videos",
-            "params": {
-                "fields": "id,status,live_status,title,created_time",
-                "access_token": ACCESS_TOKEN,
-                "type": "live"
-            }
-        },
-        {
-            "name": "/videos (no type)",
-            "url": f"{GRAPH_URL}/{PAGE_ID}/videos",
-            "params": {
-                "fields": "id,status,live_status,title,created_time",
-                "access_token": ACCESS_TOKEN
-            }
-        }
-    ]
+BASE_URL = "https://graph.facebook.com/v20.0"
 
-    for ep in endpoints:
-        print(f"\n=== Testing {ep['name']} ===")
-        try:
-            r = requests.get(ep["url"], params=ep["params"])
-            data = r.json()
-            print("Response:", data)
+def log_test(name, url):
+    print(f"\n=== Testing {name} ===")
+    try:
+        r = requests.get(url)
+        data = r.json()
+        print("Response:", json.dumps(data, indent=2))
+        if "error" in data:
+            print("⚠️ Error found in this endpoint")
+        elif not data.get("data") and not data.get("id"):
+            print("⚠️ No video/data found in this endpoint")
+    except Exception as e:
+        print("❌ Exception:", e)
 
-            if "data" in data and len(data["data"]) > 0:
-                for vid in data["data"]:
-                    print("Video candidate:", vid)
-                    if vid.get("live_status") == "LIVE" or vid.get("status") == "LIVE":
-                        print("✅ Found LIVE video:", vid["id"])
-            else:
-                print("⚠️ No video data found in this endpoint")
-        except Exception as e:
-            print("Error:", e)
+def main():
+    # Test 1: Who am I with this token?
+    log_test("/me", f"{BASE_URL}/me?access_token={PAGE_ACCESS_TOKEN}")
 
+    # Test 2: Check page info
+    log_test("/PAGE_ID", f"{BASE_URL}/{PAGE_ID}?fields=id,name&access_token={PAGE_ACCESS_TOKEN}")
+
+    # Test 3: Live videos
+    log_test("/PAGE_ID/live_videos", 
+             f"{BASE_URL}/{PAGE_ID}/live_videos?fields=id,status,live_views,permalink_url,creation_time,broadcast_start_time&access_token={PAGE_ACCESS_TOKEN}")
+
+    # Test 4: Videos type=live
+    log_test("/PAGE_ID/videos?type=live", 
+             f"{BASE_URL}/{PAGE_ID}/videos?type=live&fields=id,title,description,live_status,permalink_url&access_token={PAGE_ACCESS_TOKEN}")
+
+    # Test 5: All videos
+    log_test("/PAGE_ID/videos", 
+             f"{BASE_URL}/{PAGE_ID}/videos?fields=id,title,live_status,permalink_url&access_token={PAGE_ACCESS_TOKEN}")
 
 if __name__ == "__main__":
-    print("🔍 Starting Facebook Live Debug Tester")
-    test_live_video_methods()
+    main()
