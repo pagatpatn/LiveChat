@@ -12,21 +12,19 @@ if not PAGE_ID or not PAGE_TOKEN:
 
 
 def get_live_video(page_id, page_token):
-    """Fetch active live video for the page"""
+    """Fetch currently active live video from Page"""
     print("📺 Checking for live video...")
-    url = f"https://graph.facebook.com/v20.0/{page_id}/live_videos"
+    url = f"https://graph.facebook.com/v20.0/{page_id}"
     params = {
-        "fields": "id,title,status,creation_time",
-        "broadcast_status": ["LIVE"],  # ✅ must be array
-        "access_token": page_token,
-        "limit": 5
+        "fields": "live_videos.limit(1){id,title,creation_time,status}",
+        "access_token": page_token
     }
     res = requests.get(url, params=params).json()
     if "error" in res:
         print(f"⚠️ API Error: {json.dumps(res, indent=2)}")
         return None
 
-    videos = res.get("data", [])
+    videos = res.get("live_videos", {}).get("data", [])
     if not videos:
         print("❌ No live stream currently active.")
         return None
@@ -37,7 +35,7 @@ def get_live_video(page_id, page_token):
 
 
 def get_live_comments(video_id, page_token, since_time=None):
-    """Fetch live video comments"""
+    """Fetch new comments from the live video"""
     url = f"https://graph.facebook.com/v20.0/{video_id}/comments"
     params = {
         "fields": "from{name},message,created_time",
@@ -64,7 +62,7 @@ if __name__ == "__main__":
 
     print(f"🎯 Active live video ID: {video_id}")
 
-    # Start polling comments
+    # Start polling for new comments
     last_timestamp = int(time.time())
     while True:
         comments = get_live_comments(video_id, PAGE_TOKEN, since_time=last_timestamp)
@@ -75,7 +73,7 @@ if __name__ == "__main__":
                 ts = c["created_time"]
                 print(f"[{ts}] {user}: {msg}")
 
-            # Update timestamp so we only get new comments
+            # update marker to "now" so we only fetch new ones next time
             last_timestamp = int(time.time())
 
         time.sleep(5)
