@@ -3,86 +3,83 @@ import time
 import requests
 import json
 
-# 🔑 Environment variables (set in Railway)
-PAGE_TOKEN = os.getenv("FB_PAGE_TOKEN")
+# 🔑 Permanent Page Token + Page ID
+PAGE_TOKEN = os.getenv("FB_PAGE_TOKEN")  # permanent token
 PAGE_ID = os.getenv("FB_PAGE_ID")
 
-def safe_request(url, params):
-    """Wrapper for GET requests with error handling"""
-    try:
-        res = requests.get(url, params=params)
-        data = res.json()
-        if "error" in data:
-            print(f"⚠️ API Error: {json.dumps(data, indent=2)}")
-            return {}
-        return data
-    except Exception as e:
-        print(f"❌ Request failed: {e}")
-        return {}
-
 def get_live_video(page_id, page_token):
-    """Check for currently active live video without live-video-api"""
-    url = f"https://graph.facebook.com/v20.0/{page_id}/videos"
-    params = {
-        "fields": "id,description,live_status,created_time",
-        "access_token": page_token,
-        "limit": 5
-    }
-    res = safe_request(url, params)
+    """Fetch currently active live video for the page"""
+    url = f"https://graph.facebook.com/v20.0/{page_id}/live_videos"
+    params = {"fields": "id,status,title", "access_token": page_token}
+    res = requests.get(url, params=params).json()
 
-    if "data" not in res:
-        print("⚠️ No videos data found")
+    if "error" in res:
+        print("⚠️ API Error:", json.dumps(res, indent=2))
+        return None
+
+    if "data" not in res or not res["data"]:
+        print("❌ No live videos found.")
         return None
 
     for v in res["data"]:
-        if v.get("live_status") == "LIVE":
-            print(f"✅ Live video found: {v['id']} | {v.get('description','(no desc)')}")
+        if v.get("status") == "LIVE":
+            print(f"✅ Live video found: {v['id']} | {v.get('title','(no title)')}")
             return v["id"]
 
-    print("❌ No active LIVE video right now")
+    print("❌ No active LIVE stream.")
     return None
 
-def get_live_chat(video_id, page_token):
-    """Fetch live comments/chat for the video"""
+def fetch_live_comments(video_id, page_token, seen_ids):
+    """Fetch new comments from live video"""
     url = f"https://graph.facebook.com/v20.0/{video_id}/comments"
     params = {
         "fields": "from{name},message,created_time",
-        "order": "reverse_chronological",
+        "order": "reverse_chronological",  # newest first
         "access_token": page_token,
         "limit": 10
     }
-    res = safe_request(url, params)
+    res = requests.get(url, params=params).json()
+
+    if "error" in res:
+        print("⚠️ API Error:", json.dumps(res, indent=2))
+        return
 
     if "data" not in res:
-        print("⚠️ No comments data found")
-        return []
+        return
 
-    return res["data"]
+    new_comments = []
+    for c in res["data"]:
+        if c["id"] not in seen_ids:
+            seen_ids.add(c["id"])
+            new_comments.append(c)
+
+    # Print in chronological order
+    for c in reversed(new_comments):
+        user = c["from"]["name"]
+        msg = c.get("message", "")
+        ts = c["created_time"]
+        print(f"[{ts}] {user}: {msg}")
+
+def main():
+    if not PAGE_TOKEN or not PAGE_ID:
+        raise ValueError("❌ Missing PAGE_TOKEN or PAGE_ID env variables")
+
+    print("📺 Checking for live video...")
+    video_id = get_live_video(PAGE_ID, PAGE_TOKEN)
+    if not video_id:
+        print("❌ No live stream currently active. Exiting.")
+        return
+
+    print(f"🎯 Active live video ID: {video_id}")
+    seen_ids = set()
+
+    print("💬 Fetching live comments... (press Ctrl+C to stop)")
+    try:
+        while True:
+            fetch_live_comments(video_id, PAGE_TOKEN, seen_ids)
+            time.sleep(5)  # poll every 5 sec
+    except KeyboardInterrupt:
+        print("\n🛑 Stopped by user.")
 
 if __name__ == "__main__":
-    if not PAGE_TOKEN or not PAGE_ID:
-        raise ValueError("❌ Missing required env vars: FB_PAGE_TOKEN, FB_PAGE_ID")
-
-    print("🚀 Facebook Live Chat Fetcher started")
-
-    while True:
-        print("\n📺 Checking for live video...")
-        live_video_id = get_live_video(PAGE_ID, PAGE_TOKEN)
-
-        if live_video_id:
-            print(f"🎯 Active live video ID: {live_video_id}")
-            comments = get_live_chat(live_video_id, PAGE_TOKEN)
-
-            if comments:
-                print("💬 Latest comments:")
-                for c in comments:
-                    user = c["from"]["name"]
-                    msg = c.get("message", "")
-                    t = c["created_time"]
-                    print(f"[{t}] {user}: {msg}")
-            else:
-                print("🕙 No new comments yet.")
-        else:
-            print("⏳ No live stream currently active.")
-
-        time.sleep(15)  # 🔄 check every 15s
+    main()
