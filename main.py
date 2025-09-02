@@ -13,17 +13,14 @@ NTFY_TOPIC = os.getenv("NTFY_TOPIC", "facebook_chat")  # set this in Railway
 if not PAGE_TOKEN or not PAGE_ID:
     raise ValueError("❌ Missing env vars: FB_PAGE_TOKEN, FB_PAGE_ID")
 
-# Track seen comments and last msg per user
+# Track seen comments and last msg per user to prevent spam
 seen_comment_ids = set()
 last_message_by_user = {}
-
-# Queue for ntfy push
-pending_ntfy_msgs = []
 
 
 def safe_request(url, params):
     try:
-        res = requests.get(url, params=params, timeout=15)
+        res = requests.get(url, params=params, timeout=10)
         data = res.json()
         if "error" in data:
             print(f"⚠️ API Error: {json.dumps(data, indent=2)}")
@@ -44,15 +41,11 @@ def get_live_video(page_id, page_token):
     res = safe_request(url, params)
     data = res.get("data", [])
     if not data:
-        print("⏳ No videos data found yet.")
         return None
 
     for v in data:
         if v.get("live_status") == "LIVE":
-            print(f"✅ Live video found: {v['id']} | {v.get('description','(no desc)')}")
             return v["id"]
-
-    print("❌ No active LIVE video right now.")
     return None
 
 
@@ -66,10 +59,8 @@ def fetch_new_comments(video_id, page_token):
     }
     res = safe_request(url, params)
     items = res.get("data", [])
-    if not items:
-        return []
-
     fresh = []
+
     for c in items:
         cid = c.get("id")
         if not cid or cid in seen_comment_ids:
@@ -78,7 +69,7 @@ def fetch_new_comments(video_id, page_token):
         user = c.get("from", {}).get("name", "Unknown")
         msg = c.get("message", "")
 
-        # 🚫 Prevent spam
+        # 🚫 Prevent spam: only first message until different
         if last_message_by_user.get(user) == msg:
             continue
 
@@ -90,25 +81,19 @@ def fetch_new_comments(video_id, page_token):
     return fresh
 
 
-def send_ntfy(messages):
-    """Send batched messages to ntfy"""
-    if not messages:
-        return
-    text = "\n".join(f"{m['from']['name']}: {m.get('message','')}" for m in messages)
-
+def send_ntfy(msg_obj):
+    """Send single message to ntfy"""
     try:
-        res = requests.post(
+        user = msg_obj.get("from", {}).get("name", "Unknown")
+        msg = msg_obj.get("message", "")
+        requests.post(
             f"https://ntfy.sh/{NTFY_TOPIC}",
-            data=text.encode("utf-8"),
+            data=f"{user}: {msg}".encode("utf-8"),
             headers={"Title": "Facebook"},
-            timeout=10,
+            timeout=5,
         )
-        if res.status_code == 200:
-            print(f"📤 Sent {len(messages)} messages to ntfy")
-        else:
-            print(f"⚠️ Failed to send to ntfy: {res.status_code} {res.text}")
-    except Exception as e:
-        print(f"❌ ntfy send failed: {e}")
+    except Exception:
+        pass  # fail silently to avoid breaking loop
 
 
 def main():
@@ -119,31 +104,21 @@ def main():
         print("\n📺 Checking for live video…")
         video_id = get_live_video(PAGE_ID, PAGE_TOKEN)
         if not video_id:
-            time.sleep(10)
+            time.sleep(5)
 
     print(f"🎯 Active live video ID: {video_id}")
     print("💬 Listening for new comments…")
 
-    last_ntfy_push = time.time()
-
     while True:
         new_comments = fetch_new_comments(video_id, PAGE_TOKEN)
-        if new_comments:
-            for c in new_comments:
-                user = c.get("from", {}).get("name", "Unknown")
-                msg = c.get("message", "")
-                ts = c.get("created_time", "")
-                print(f"[{ts}] {user}: {msg}")
-                pending_ntfy_msgs.append(c)
+        for c in new_comments:
+            ts = c.get("created_time", "")
+            user = c.get("from", {}).get("name", "Unknown")
+            msg = c.get("message", "")
+            print(f"[{ts}] {user}: {msg}")  # real-time console log
+            send_ntfy(c)  # send immediately to ntfy
 
-        # ⏱ Push to ntfy every 5s
-        if time.time() - last_ntfy_push >= 5 and pending_ntfy_msgs:
-            send_ntfy(pending_ntfy_msgs)
-            pending_ntfy_msgs.clear()
-            last_ntfy_push = time.time()
-
-        time.sleep(2)  # keep 2s polling for real-time
-
+        time.sleep(1)  # 🔄 1s polling for near real-time
 
 if __name__ == "__main__":
     main()
