@@ -1,27 +1,64 @@
 import os
 import time
 import requests
-import json
+import re
 import threading
+import json
+from datetime import datetime, timedelta
 from queue import Queue
+from kickapi import KickAPI
 
+# -----------------------------
+# --- Config / Env Variables ---
+# -----------------------------
+# Facebook
+FB_PAGE_TOKEN = os.getenv("FB_PAGE_TOKEN")
+FB_PAGE_ID = os.getenv("FB_PAGE_ID")
+# Kick
+KICK_CHANNEL = os.getenv("KICK_CHANNEL", "")
+KICK_POLL_INTERVAL = 5
+KICK_TIME_WINDOW_MINUTES = 0.1
+KICK_DELAY = 5
+# YouTube
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
+YOUTUBE_CHANNEL_ID = os.getenv("YOUTUBE_CHANNEL_ID", "")
+YOUTUBE_NTFY_DELAY = 2
+# NTFY
+NTFY_TOPIC = os.getenv("NTFY_TOPIC", "streamchats123")
+
+# -----------------------------
+# --- Global Tracking ---
+# -----------------------------
+# Facebook
+fb_seen_comment_ids = set()
+fb_last_message_by_user = {}
+fb_ntfy_queue = Queue()
+# Kick
+kick_api = KickAPI()
+kick_seen_ids = set()
+kick_queue = []
+kick_last_sent = 0
+# YouTube
+yt_sent_messages = set()
+
+# -----------------------------
+# --- Utility Functions ---
+# -----------------------------
+def send_ntfy(title: str, msg: str):
+    try:
+        requests.post(
+            f"https://ntfy.sh/{NTFY_TOPIC}",
+            data=msg.encode("utf-8"),
+            headers={"Title": title},
+            timeout=5,
+        )
+    except Exception as e:
+        print("⚠️ Failed to send NTFY:", e)
+
+# -----------------------------
+# --- Facebook Functions ---
+# -----------------------------
 GRAPH = "https://graph.facebook.com/v20.0"
-
-# ✅ Env variables
-PAGE_TOKEN = os.getenv("FB_PAGE_TOKEN")
-PAGE_ID = os.getenv("FB_PAGE_ID")
-NTFY_TOPIC = os.getenv("NTFY_TOPIC", "facebook_chat")
-
-if not PAGE_TOKEN or not PAGE_ID:
-    raise ValueError("❌ Missing env vars: FB_PAGE_TOKEN, FB_PAGE_ID")
-
-# Track seen comments and last msg per user
-seen_comment_ids = set()
-last_message_by_user = {}
-
-# Queue for sending messages to NTFY
-ntfy_queue = Queue()
-
 
 def safe_request(url, params):
     try:
@@ -35,8 +72,7 @@ def safe_request(url, params):
         print(f"❌ Request failed: {e}")
         return {}
 
-
-def get_live_video(page_id, page_token):
+def get_fb_live_video(page_id, page_token):
     url = f"{GRAPH}/{page_id}/videos"
     params = {
         "fields": "id,description,live_status,created_time",
@@ -47,12 +83,11 @@ def get_live_video(page_id, page_token):
     data = res.get("data", [])
     for v in data:
         if v.get("live_status") == "LIVE":
-            print(f"✅ Live video found: {v['id']} | {v.get('description', '(no desc)')}")
+            print(f"✅ [Facebook] Live video found: {v['id']} | {v.get('description','(no desc)')}")
             return v["id"]
     return None
 
-
-def fetch_new_comments(video_id, page_token):
+def fetch_fb_new_comments(video_id, page_token):
     url = f"{GRAPH}/{video_id}/comments"
     params = {
         "fields": "id,from{name},message,created_time",
@@ -63,73 +98,195 @@ def fetch_new_comments(video_id, page_token):
     res = safe_request(url, params)
     items = res.get("data", [])
     fresh = []
-
     for c in items:
         cid = c.get("id")
-        if not cid or cid in seen_comment_ids:
+        if not cid or cid in fb_seen_comment_ids:
             continue
         user = c.get("from", {}).get("name", "Unknown")
         msg = c.get("message", "")
-
-        # prevent spam: same message from same user
-        if last_message_by_user.get(user) == msg:
+        if fb_last_message_by_user.get(user) == msg:
             continue
-
-        seen_comment_ids.add(cid)
-        last_message_by_user[user] = msg
+        fb_seen_comment_ids.add(cid)
+        fb_last_message_by_user[user] = msg
         fresh.append(c)
-
     fresh.reverse()
     return fresh
 
-
-def ntfy_worker():
-    """Thread worker to send messages from queue to ntfy"""
+def fb_ntfy_worker():
     while True:
-        msg_obj = ntfy_queue.get()
+        msg_obj = fb_ntfy_queue.get()
         if msg_obj is None:
             break
         try:
             user = msg_obj.get("from", {}).get("name", "Unknown")
             msg = msg_obj.get("message", "")
-            requests.post(
-                f"https://ntfy.sh/{NTFY_TOPIC}",
-                data=f"{user}: {msg}".encode("utf-8"),
-                headers={"Title": "Facebook"},
-                timeout=5,
-            )
+            send_ntfy("Facebook", f"{user}: {msg}")
         except Exception:
             pass
-        ntfy_queue.task_done()
+        fb_ntfy_queue.task_done()
 
-
-def main():
-    print("🚀 Facebook Live Chat Fetcher started")
-
-    # start ntfy worker thread
-    threading.Thread(target=ntfy_worker, daemon=True).start()
-
+def listen_facebook():
+    if not FB_PAGE_TOKEN or not FB_PAGE_ID:
+        print("⚠️ FB_PAGE_TOKEN or FB_PAGE_ID not set, skipping Facebook listener")
+        return
+    threading.Thread(target=fb_ntfy_worker, daemon=True).start()
     video_id = None
     while not video_id:
-        print("\n📺 Checking for live video…")
-        video_id = get_live_video(PAGE_ID, PAGE_TOKEN)
+        print("📺 [Facebook] Checking for live video…")
+        video_id = get_fb_live_video(FB_PAGE_ID, FB_PAGE_TOKEN)
         if not video_id:
             time.sleep(5)
-
-    print(f"🎯 Active live video ID: {video_id}")
-    print("💬 Listening for new comments…")
-
+    print(f"🎯 [Facebook] Active live video ID: {video_id}")
     while True:
-        new_comments = fetch_new_comments(video_id, PAGE_TOKEN)
+        new_comments = fetch_fb_new_comments(video_id, FB_PAGE_TOKEN)
         for c in new_comments:
             ts = c.get("created_time", "")
             user = c.get("from", {}).get("name", "Unknown")
             msg = c.get("message", "")
-            print(f"[{ts}] {user}: {msg}")  # console log
-            ntfy_queue.put(c)  # send asynchronously to ntfy
+            print(f"[Facebook {ts}] {user}: {msg}")
+            fb_ntfy_queue.put(c)
+        time.sleep(1)
 
-        time.sleep(1)  # near real-time polling
+# -----------------------------
+# --- Kick Functions ---
+# -----------------------------
+EMOJI_MAP = {"GiftedYAY":"🎉","ErectDance":"💃"}
+emoji_pattern = r"\[emote:(\d+):([^\]]+)\]"
 
+def extract_emoji(text: str) -> str:
+    matches = re.findall(emoji_pattern, text)
+    for match in matches:
+        emote_id, emote_name = match
+        emoji_char = EMOJI_MAP.get(emote_name, f"[{emote_name}]")
+        text = text.replace(f"[emote:{emote_id}:{emote_name}]", emoji_char)
+    return text
 
+def get_kick_chat(channel_id: int):
+    try:
+        past_time = datetime.utcnow() - timedelta(minutes=KICK_TIME_WINDOW_MINUTES)
+        formatted_time = past_time.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        chat = kick_api.chat(channel_id, formatted_time)
+        messages = []
+        if chat and hasattr(chat, "messages") and chat.messages:
+            for msg in chat.messages:
+                message_text = msg.text if hasattr(msg, "text") else "No text"
+                message_text = extract_emoji(message_text)
+                messages.append({
+                    "id": msg.id if hasattr(msg, "id") else f"{msg.sender.username}:{message_text}",
+                    "username": msg.sender.username if hasattr(msg, "sender") else "Unknown",
+                    "text": message_text,
+                    "timestamp": datetime.now().strftime("%H:%M:%S"),
+                })
+        return messages
+    except Exception as e:
+        print("⚠️ Error fetching Kick chat:", e)
+        return []
+
+def listen_kick():
+    if not KICK_CHANNEL:
+        print("⚠️ KICK_CHANNEL not set, skipping Kick listener")
+        return
+    channel = kick_api.channel(KICK_CHANNEL)
+    if not channel:
+        print(f"⚠️ Kick channel '{KICK_CHANNEL}' not found")
+        return
+    print(f"✅ Connected to Kick chat for channel: {channel.username}")
+    global kick_last_sent
+    while True:
+        messages = get_kick_chat(channel.id)
+        for msg in messages:
+            if msg["id"] not in kick_seen_ids:
+                kick_seen_ids.add(msg["id"])
+                kick_queue.append(msg)
+                print(f"[Kick {msg['timestamp']}] {msg['username']}: {msg['text']}")
+        if kick_queue and (time.time() - kick_last_sent >= KICK_DELAY):
+            msg = kick_queue.pop(0)
+            send_ntfy("Kick", f"{msg['username']}: {msg['text']}")
+            kick_last_sent = time.time()
+        time.sleep(1)
+
+# -----------------------------
+# --- YouTube Functions ---
+# -----------------------------
+def get_youtube_live_chat_id():
+    try:
+        search_url = (
+            f"https://www.googleapis.com/youtube/v3/search"
+            f"?part=snippet"
+            f"&channelId={YOUTUBE_CHANNEL_ID}"
+            f"&eventType=live"
+            f"&type=video"
+            f"&key={YOUTUBE_API_KEY}"
+        )
+        resp = requests.get(search_url).json()
+        items = resp.get("items", [])
+        if not items:
+            return None
+        video_id = items[0]["id"]["videoId"]
+        videos_url = (
+            f"https://www.googleapis.com/youtube/v3/videos"
+            f"?part=liveStreamingDetails"
+            f"&id={video_id}"
+            f"&key={YOUTUBE_API_KEY}"
+        )
+        resp2 = requests.get(videos_url).json()
+        live_chat_id = resp2["items"][0]["liveStreamingDetails"].get("activeLiveChatId")
+        return live_chat_id
+    except Exception as e:
+        print("❌ Error fetching YouTube chat ID:", e)
+        return None
+
+def listen_youtube():
+    if not YOUTUBE_API_KEY or not YOUTUBE_CHANNEL_ID:
+        print("⚠️ YouTube API details not set, skipping YouTube listener")
+        return
+    while True:
+        print("🔍 Checking YouTube for live stream...")
+        live_chat_id = get_youtube_live_chat_id()
+        if not live_chat_id:
+            print("⏳ No YouTube live stream detected. Retrying in 10s...")
+            time.sleep(10)
+            continue
+        print("✅ Connected to YouTube live chat!")
+        page_token = None
+        while True:
+            try:
+                url = (
+                    f"https://www.googleapis.com/youtube/v3/liveChat/messages"
+                    f"?liveChatId={live_chat_id}"
+                    f"&part=snippet,authorDetails"
+                    f"&key={YOUTUBE_API_KEY}"
+                )
+                if page_token:
+                    url += f"&pageToken={page_token}"
+                resp = requests.get(url).json()
+                for item in resp.get("items", []):
+                    msg_id = item["id"]
+                    if msg_id in yt_sent_messages:
+                        continue
+                    yt_sent_messages.add(msg_id)
+                    user = item["authorDetails"]["displayName"]
+                    msg = item["snippet"]["displayMessage"]
+                    print(f"[YouTube] {user}: {msg}")
+                    send_ntfy("YouTube", f"{user}: {msg}")
+                    time.sleep(YOUTUBE_NTFY_DELAY)
+                page_token = resp.get("nextPageToken")
+                polling_interval = resp.get("pollingIntervalMillis", 5000) / 1000
+                time.sleep(polling_interval)
+            except Exception as e:
+                print("❌ Error in YouTube chat loop:", e)
+                break
+
+# -----------------------------
+# --- Main: Run All ---
+# -----------------------------
 if __name__ == "__main__":
-    main()
+    threads = []
+    t_fb = threading.Thread(target=listen_facebook, daemon=True)
+    t_kick = threading.Thread(target=listen_kick, daemon=True)
+    t_yt = threading.Thread(target=listen_youtube, daemon=True)
+    threads.extend([t_fb, t_kick, t_yt])
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
