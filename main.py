@@ -29,31 +29,50 @@ NTFY_TOPIC = os.getenv("NTFY_TOPIC", "streamchats123")
 # -----------------------------
 # --- Global Tracking ---
 # -----------------------------
+# Central NTFY Queue
+ntfy_queue = Queue()
+last_ntfy_sent = 0  # last time a message was sent (throttle)
+
 # Facebook
 fb_seen_comment_ids = set()
 fb_last_message_by_user = {}
-fb_ntfy_queue = Queue()
+fb_last_comment_time = None
+
 # Kick
 kick_api = KickAPI()
 kick_seen_ids = set()
 kick_queue = []
-kick_last_sent = 0
+
 # YouTube
 yt_sent_messages = set()
 
 # -----------------------------
-# --- Utility Functions ---
+# --- NTFY Worker (Single) ---
 # -----------------------------
-def send_ntfy(title: str, msg: str):
-    try:
-        requests.post(
-            f"https://ntfy.sh/{NTFY_TOPIC}",
-            data=msg.encode("utf-8"),
-            headers={"Title": title},
-            timeout=5,
-        )
-    except Exception as e:
-        print("⚠️ Failed to send NTFY:", e)
+def ntfy_worker():
+    global last_ntfy_sent
+    while True:
+        msg_obj = ntfy_queue.get()
+        if msg_obj is None:
+            break
+        try:
+            # Throttle NTFY sends to 5s
+            now = time.time()
+            if now - last_ntfy_sent < 5:
+                time.sleep(5 - (now - last_ntfy_sent))
+            title = msg_obj.get("title", "Chat")
+            user = msg_obj.get("user", "Unknown")
+            msg = msg_obj.get("msg", "")
+            requests.post(
+                f"https://ntfy.sh/{NTFY_TOPIC}",
+                data=f"{user}: {msg}".encode("utf-8"),
+                headers={"Title": title},
+                timeout=5,
+            )
+            last_ntfy_sent = time.time()
+        except Exception as e:
+            print("⚠️ Failed to send NTFY:", e)
+        ntfy_queue.task_done()
 
 # -----------------------------
 # --- Facebook Functions ---
@@ -88,16 +107,21 @@ def get_fb_live_video(page_id, page_token):
     return None
 
 def fetch_fb_new_comments(video_id, page_token):
+    global fb_last_comment_time
     url = f"{GRAPH}/{video_id}/comments"
     params = {
         "fields": "id,from{name},message,created_time",
-        "order": "reverse_chronological",
+        "order": "chronological",
         "access_token": page_token,
         "limit": 25,
     }
+    if fb_last_comment_time:
+        params["since"] = fb_last_comment_time
+
     res = safe_request(url, params)
     items = res.get("data", [])
     fresh = []
+
     for c in items:
         cid = c.get("id")
         if not cid or cid in fb_seen_comment_ids:
@@ -108,28 +132,16 @@ def fetch_fb_new_comments(video_id, page_token):
             continue
         fb_seen_comment_ids.add(cid)
         fb_last_message_by_user[user] = msg
-        fresh.append(c)
-    fresh.reverse()
-    return fresh
+        fresh.append({"title": "Facebook", "user": user, "msg": msg})
 
-def fb_ntfy_worker():
-    while True:
-        msg_obj = fb_ntfy_queue.get()
-        if msg_obj is None:
-            break
-        try:
-            user = msg_obj.get("from", {}).get("name", "Unknown")
-            msg = msg_obj.get("message", "")
-            send_ntfy("Facebook", f"{user}: {msg}")
-        except Exception:
-            pass
-        fb_ntfy_queue.task_done()
+    if fresh:
+        fb_last_comment_time = items[-1]["created_time"]
+    return fresh
 
 def listen_facebook():
     if not FB_PAGE_TOKEN or not FB_PAGE_ID:
         print("⚠️ FB_PAGE_TOKEN or FB_PAGE_ID not set, skipping Facebook listener")
         return
-    threading.Thread(target=fb_ntfy_worker, daemon=True).start()
     video_id = None
     while not video_id:
         print("📺 [Facebook] Checking for live video…")
@@ -140,11 +152,8 @@ def listen_facebook():
     while True:
         new_comments = fetch_fb_new_comments(video_id, FB_PAGE_TOKEN)
         for c in new_comments:
-            ts = c.get("created_time", "")
-            user = c.get("from", {}).get("name", "Unknown")
-            msg = c.get("message", "")
-            print(f"[Facebook {ts}] {user}: {msg}")
-            fb_ntfy_queue.put(c)
+            print(f"[Facebook] {c['user']}: {c['msg']}")
+            ntfy_queue.put(c)
         time.sleep(1)
 
 # -----------------------------
@@ -191,7 +200,7 @@ def listen_kick():
         print(f"⚠️ Kick channel '{KICK_CHANNEL}' not found")
         return
     print(f"✅ Connected to Kick chat for channel: {channel.username}")
-    global kick_last_sent
+    global kick_queue
     while True:
         messages = get_kick_chat(channel.id)
         for msg in messages:
@@ -199,10 +208,9 @@ def listen_kick():
                 kick_seen_ids.add(msg["id"])
                 kick_queue.append(msg)
                 print(f"[Kick {msg['timestamp']}] {msg['username']}: {msg['text']}")
-        if kick_queue and (time.time() - kick_last_sent >= KICK_DELAY):
+        if kick_queue:
             msg = kick_queue.pop(0)
-            send_ntfy("Kick", f"{msg['username']}: {msg['text']}")
-            kick_last_sent = time.time()
+            ntfy_queue.put({"title": "Kick", "user": msg["username"], "msg": msg["text"]})
         time.sleep(1)
 
 # -----------------------------
@@ -268,7 +276,7 @@ def listen_youtube():
                     user = item["authorDetails"]["displayName"]
                     msg = item["snippet"]["displayMessage"]
                     print(f"[YouTube] {user}: {msg}")
-                    send_ntfy("YouTube", f"{user}: {msg}")
+                    ntfy_queue.put({"title": "YouTube", "user": user, "msg": msg})
                     time.sleep(YOUTUBE_NTFY_DELAY)
                 page_token = resp.get("nextPageToken")
                 polling_interval = resp.get("pollingIntervalMillis", 5000) / 1000
@@ -281,11 +289,15 @@ def listen_youtube():
 # --- Main: Run All ---
 # -----------------------------
 if __name__ == "__main__":
-    threads = []
-    t_fb = threading.Thread(target=listen_facebook, daemon=True)
-    t_kick = threading.Thread(target=listen_kick, daemon=True)
-    t_yt = threading.Thread(target=listen_youtube, daemon=True)
-    threads.extend([t_fb, t_kick, t_yt])
+    # Start NTFY worker
+    threading.Thread(target=ntfy_worker, daemon=True).start()
+
+    # Start listeners
+    threads = [
+        threading.Thread(target=listen_facebook, daemon=True),
+        threading.Thread(target=listen_kick, daemon=True),
+        threading.Thread(target=listen_youtube, daemon=True)
+    ]
     for t in threads:
         t.start()
     for t in threads:
