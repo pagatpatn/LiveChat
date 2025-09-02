@@ -1,43 +1,66 @@
 import requests
 import json
 
-# 👇 replace with your Page Access Token (not user token)
-PAGE_ACCESS_TOKEN = "YOUR_PAGE_ACCESS_TOKEN"
+# 🔑 Replace with your own details
+APP_ID = "YOUR_APP_ID"
+APP_SECRET = "YOUR_APP_SECRET"
+SHORT_LIVED_TOKEN = "PASTE_YOUR_SHORT_LIVED_USER_TOKEN"
 PAGE_ID = "110575327401854"  # Last Move Gaming
 
-BASE_URL = "https://graph.facebook.com/v20.0"
+def log(title, data):
+    print(f"=== {title} ===")
+    print(json.dumps(data, indent=2))
+    if "error" in data:
+        print("⚠️ Error:", data["error"]["message"])
+    print()
 
-def log_test(name, url):
-    print(f"\n=== Testing {name} ===")
-    try:
-        r = requests.get(url)
-        data = r.json()
-        print("Response:", json.dumps(data, indent=2))
-        if "error" in data:
-            print("⚠️ Error found in this endpoint")
-        elif not data.get("data") and not data.get("id"):
-            print("⚠️ No video/data found in this endpoint")
-    except Exception as e:
-        print("❌ Exception:", e)
+# Step 1: Exchange short-lived for long-lived user token
+url_long = (
+    f"https://graph.facebook.com/v20.0/oauth/access_token"
+    f"?grant_type=fb_exchange_token"
+    f"&client_id={APP_ID}"
+    f"&client_secret={APP_SECRET}"
+    f"&fb_exchange_token={SHORT_LIVED_TOKEN}"
+)
+resp = requests.get(url_long).json()
+log("Exchange for Long-Lived User Token", resp)
 
-def main():
-    # Test 1: Who am I with this token?
-    log_test("/me", f"{BASE_URL}/me?access_token={PAGE_ACCESS_TOKEN}")
+if "access_token" not in resp:
+    print("❌ Could not get long-lived token")
+    exit()
 
-    # Test 2: Check page info
-    log_test("/PAGE_ID", f"{BASE_URL}/{PAGE_ID}?fields=id,name&access_token={PAGE_ACCESS_TOKEN}")
+LONG_LIVED_TOKEN = resp["access_token"]
 
-    # Test 3: Live videos
-    log_test("/PAGE_ID/live_videos", 
-             f"{BASE_URL}/{PAGE_ID}/live_videos?fields=id,status,live_views,permalink_url,creation_time,broadcast_start_time&access_token={PAGE_ACCESS_TOKEN}")
+# Step 2: Get Page Access Token
+url_accounts = f"https://graph.facebook.com/v20.0/me/accounts?access_token={LONG_LIVED_TOKEN}"
+resp = requests.get(url_accounts).json()
+log("Fetching Page Access Token", resp)
 
-    # Test 4: Videos type=live
-    log_test("/PAGE_ID/videos?type=live", 
-             f"{BASE_URL}/{PAGE_ID}/videos?type=live&fields=id,title,description,live_status,permalink_url&access_token={PAGE_ACCESS_TOKEN}")
+if "data" not in resp or len(resp["data"]) == 0:
+    print("❌ No pages found. Check that this token has pages_show_list and related permissions.")
+    exit()
 
-    # Test 5: All videos
-    log_test("/PAGE_ID/videos", 
-             f"{BASE_URL}/{PAGE_ID}/videos?fields=id,title,live_status,permalink_url&access_token={PAGE_ACCESS_TOKEN}")
+# Extract correct page
+page_info = None
+for p in resp["data"]:
+    if p["id"] == PAGE_ID:
+        page_info = p
+        break
 
-if __name__ == "__main__":
-    main()
+if not page_info:
+    print(f"❌ Page ID {PAGE_ID} not found in your account list")
+    exit()
+
+PAGE_ACCESS_TOKEN = page_info["access_token"]
+print(f"✅ Got Page Token for {page_info['name']}")
+
+# Step 3: Test Live Video Endpoints
+endpoints = {
+    "Test /live_videos": f"https://graph.facebook.com/v20.0/{PAGE_ID}/live_videos?access_token={PAGE_ACCESS_TOKEN}",
+    "Test /videos?type=live": f"https://graph.facebook.com/v20.0/{PAGE_ID}/videos?type=live&access_token={PAGE_ACCESS_TOKEN}",
+    "Test /videos": f"https://graph.facebook.com/v20.0/{PAGE_ID}/videos?access_token={PAGE_ACCESS_TOKEN}"
+}
+
+for title, url in endpoints.items():
+    resp = requests.get(url).json()
+    log(title, resp)
