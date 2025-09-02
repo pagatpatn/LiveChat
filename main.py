@@ -1,102 +1,93 @@
 import os
 import time
 import requests
-import json
+import threading
+from datetime import datetime
 
-# 🔑 Environment variables (set in Railway)
-PAGE_TOKEN = os.getenv("FB_PAGE_TOKEN")
-PAGE_ID = os.getenv("FB_PAGE_ID")
+# --- Config (Railway ENV) ---
+FB_PAGE_ID = os.getenv("FB_PAGE_ID", "")
+FB_ACCESS_TOKEN = os.getenv("FB_ACCESS_TOKEN", "")
+NTFY_TOPIC = os.getenv("NTFY_TOPIC", "streamchats123")
 
-def safe_request(url, params):
-    """Wrapper for GET requests with error handling"""
+# Polling
+FB_POLL_INTERVAL = 5  # seconds
+
+# Track seen comments
+fb_seen_ids = set()
+
+def send_ntfy(title: str, msg: str):
     try:
-        res = requests.get(url, params=params)
-        data = res.json()
-        if "error" in data:
-            print(f"⚠️ API Error: {json.dumps(data, indent=2)}")
-            return {}
-        return data
+        requests.post(
+            f"https://ntfy.sh/{NTFY_TOPIC}",
+            data=msg.encode("utf-8"),
+            headers={"Title": title},
+            timeout=5,
+        )
     except Exception as e:
-        print(f"❌ Request failed: {e}")
-        return {}
+        print("⚠️ Failed to send NTFY:", e)
 
-def get_live_video(page_id, page_token):
-    """Check for currently active live video without live-video-api"""
-    url = f"https://graph.facebook.com/v20.0/{page_id}/videos"
-    params = {
-        "fields": "id,description,live_status,created_time",
-        "access_token": page_token,
-        "limit": 5
-    }
-    res = safe_request(url, params)
-
-    if "data" not in res:
-        print("⚠️ No videos data found")
+def get_live_video_id():
+    """Find current live video for the FB page."""
+    url = (
+        f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/videos"
+        f"?fields=id,live_status,title"
+        f"&access_token={FB_ACCESS_TOKEN}"
+    )
+    resp = requests.get(url).json()
+    if "error" in resp:
+        print("⚠️ API Error:", resp)
         return None
 
-    for v in res["data"]:
-        if v.get("live_status") == "LIVE":
-            print(f"✅ Live video found: {v['id']} | {v.get('description','(no desc)')}")
-            return v["id"]
-
-    print("❌ No active LIVE video right now")
+    for video in resp.get("data", []):
+        if video.get("live_status") == "LIVE":
+            return video["id"]
     return None
 
-def get_live_chat(video_id, page_token, since=None):
-    """Fetch live comments/chat for the video, only new ones if since is set"""
-    url = f"https://graph.facebook.com/v20.0/{video_id}/comments"
-    params = {
-        "fields": "from{name},message,created_time",
-        "order": "reverse_chronological",
-        "access_token": page_token,
-        "limit": 10
-    }
-    if since:
-        params["since"] = since
+def fetch_new_comments(video_id: str):
+    """Fetch only new comments from a live video."""
+    url = (
+        f"https://graph.facebook.com/v19.0/{video_id}/comments"
+        f"?order=reverse_chronological"
+        f"&filter=stream"
+        f"&fields=from{{name}},message,created_time,id"
+        f"&access_token={FB_ACCESS_TOKEN}"
+    )
+    resp = requests.get(url).json()
+    if "error" in resp:
+        print("⚠️ API Error fetching comments:", resp)
+        return []
 
-    res = safe_request(url, params)
+    new_comments = []
+    for c in resp.get("data", []):
+        cid = c["id"]
+        if cid not in fb_seen_ids:  # avoid duplicates
+            fb_seen_ids.add(cid)
+            new_comments.append(c)
 
-    if "data" not in res:
-        print("⚠️ No comments data found")
-        return [], since
+    return list(reversed(new_comments))  # oldest first
 
-    comments = res["data"]
-    new_since = since
-    if comments:
-        # update since with the latest comment timestamp
-        new_since = comments[0]["created_time"]
+def listen_facebook():
+    """Loop for Facebook live comments."""
+    print("📺 Checking for live video...")
+    video_id = None
 
-    return comments, new_since
+    while not video_id:
+        video_id = get_live_video_id()
+        if not video_id:
+            print("⏳ No live video found, retrying in 10s...")
+            time.sleep(10)
+
+    print(f"✅ Live video found: {video_id}")
+    while True:
+        comments = fetch_new_comments(video_id)
+        for c in comments:
+            ts = c.get("created_time", "")
+            user = c.get("from", {}).get("name", "Unknown")
+            msg = c.get("message", "")
+            print(f"[FB {ts}] {user}: {msg}")
+            send_ntfy("Facebook", f"{user}: {msg}")
+
+        time.sleep(FB_POLL_INTERVAL)
 
 if __name__ == "__main__":
-    if not PAGE_TOKEN or not PAGE_ID:
-        raise ValueError("❌ Missing required env vars: FB_PAGE_TOKEN, FB_PAGE_ID")
-
-    print("🚀 Facebook Live Chat Fetcher started")
-
-    last_seen = None
-    live_video_id = None
-
-    while True:
-        if not live_video_id:
-            print("\n📺 Checking for live video...")
-            live_video_id = get_live_video(PAGE_ID, PAGE_TOKEN)
-            if live_video_id:
-                print(f"🎯 Active live video ID: {live_video_id}")
-            else:
-                time.sleep(15)
-                continue
-
-        comments, last_seen = get_live_chat(live_video_id, PAGE_TOKEN, last_seen)
-
-        if comments:
-            print("💬 New comments:")
-            for c in reversed(comments):  # print oldest first
-                user = c["from"]["name"]
-                msg = c.get("message", "")
-                t = c["created_time"]
-                print(f"[{t}] {user}: {msg}")
-        else:
-            print("🕙 No new comments yet.")
-
-        time.sleep(5)  # 🔄 fetch new comments every 5s
+    listen_facebook()
