@@ -234,29 +234,47 @@ def listen_kick():
             ntfy_queue.put({"title": "Kick", "user": msg["username"], "msg": msg["text"]})
         time.sleep(1)
 
-# -----------------------------
-# --- YouTube Functions ---
-# -----------------------------
+# ------------------ YouTube Section ------------------ #
+yt_sent_messages = set()
+last_checked_video_id = None
+
 def get_youtube_live_chat_id():
+    """Get liveChatId for an active YouTube livestream."""
+    global last_checked_video_id
     try:
+        # If we already found a live video earlier, reuse it
+        if last_checked_video_id:
+            videos_url = (
+                f"https://www.googleapis.com/youtube/v3/videos"
+                f"?part=liveStreamingDetails"
+                f"&id={last_checked_video_id}"
+                f"&key={YOUTUBE_API_KEY}"
+            )
+            resp = requests.get(videos_url).json()
+            items = resp.get("items", [])
+            if items:
+                live_chat_id = items[0]["liveStreamingDetails"].get("activeLiveChatId")
+                if live_chat_id:
+                    return live_chat_id  # ✅ Still live, reuse it
+
+        # Otherwise, call search (expensive API call)
+        print("🔍 Running YouTube search for active livestream...")
         search_url = (
             f"https://www.googleapis.com/youtube/v3/search"
             f"?part=snippet"
             f"&channelId={YOUTUBE_CHANNEL_ID}"
             f"&eventType=live"
             f"&type=video"
+            f"&maxResults=1"
             f"&key={YOUTUBE_API_KEY}"
         )
         resp = requests.get(search_url).json()
-        print("🔍 YouTube search response:", json.dumps(resp, indent=2))  # DEBUG LOG
-
         items = resp.get("items", [])
         if not items:
-            print("⚠️ No live videos found in search response")
             return None
 
         video_id = items[0]["id"]["videoId"]
-        print(f"🎥 Found live video ID: {video_id}")
+        last_checked_video_id = video_id  # 🔒 Save for reuse
 
         videos_url = (
             f"https://www.googleapis.com/youtube/v3/videos"
@@ -265,11 +283,7 @@ def get_youtube_live_chat_id():
             f"&key={YOUTUBE_API_KEY}"
         )
         resp2 = requests.get(videos_url).json()
-        print("📡 YouTube videos response:", json.dumps(resp2, indent=2))  # DEBUG LOG
-
         live_chat_id = resp2["items"][0]["liveStreamingDetails"].get("activeLiveChatId")
-        if not live_chat_id:
-            print("⚠️ Live video found but no active chat ID")
         return live_chat_id
     except Exception as e:
         print("❌ Error fetching YouTube chat ID:", e)
@@ -280,13 +294,15 @@ def listen_youtube():
     if not YOUTUBE_API_KEY or not YOUTUBE_CHANNEL_ID:
         print("⚠️ YouTube API details not set, skipping YouTube listener")
         return
+
     while True:
         print("🔍 Checking YouTube for live stream...")
         live_chat_id = get_youtube_live_chat_id()
         if not live_chat_id:
-            print("⏳ No YouTube live stream detected. Retrying in 10s...")
-            time.sleep(10)
+            print("⏳ No YouTube live stream detected. Retrying in 30s...")
+            time.sleep(30)  # less frequent search when no stream
             continue
+
         print("✅ Connected to YouTube live chat!")
         page_token = None
         while True:
@@ -300,23 +316,31 @@ def listen_youtube():
                 if page_token:
                     url += f"&pageToken={page_token}"
                 resp = requests.get(url).json()
+
+                # If livestream ended, break back to outer loop
+                if "error" in resp and resp["error"]["errors"][0]["reason"] == "liveChatEnded":
+                    print("⚠️ YouTube live chat ended, restarting search...")
+                    break
+
                 for item in resp.get("items", []):
                     msg_id = item["id"]
                     if msg_id in yt_sent_messages:
                         continue
                     yt_sent_messages.add(msg_id)
+
                     user = item["authorDetails"]["displayName"]
                     msg = item["snippet"]["displayMessage"]
                     print(f"[YouTube] {user}: {msg}")
-                    ntfy_queue.put({"title": "YouTube", "user": user, "msg": msg})
+                    send_ntfy("YouTube", f"{user}: {msg}")
                     time.sleep(YOUTUBE_NTFY_DELAY)
+
                 page_token = resp.get("nextPageToken")
                 polling_interval = resp.get("pollingIntervalMillis", 5000) / 1000
                 time.sleep(polling_interval)
+
             except Exception as e:
                 print("❌ Error in YouTube chat loop:", e)
                 break
-
 
 # -----------------------------
 # --- Main: Run All ---
