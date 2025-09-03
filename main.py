@@ -297,7 +297,7 @@ def listen_youtube():
                     user = item["authorDetails"]["displayName"]
                     msg = item["snippet"]["displayMessage"]
                     print(f"[YouTube] {user}: {msg}")
-                    ntfy_queue.put({"title": "YouTube", "user": user, "msg": msg})
+                    send_ntfy("YouTube", f"{user}: {msg}")
                     time.sleep(YOUTUBE_NTFY_DELAY)
                 page_token = resp.get("nextPageToken")
                 polling_interval = resp.get("pollingIntervalMillis", 5000) / 1000
@@ -305,7 +305,6 @@ def listen_youtube():
             except Exception as e:
                 print("❌ Error in YouTube chat loop:", e)
                 break
-
 # -----------------------------
 # --- Main: Run All ---
 # -----------------------------
