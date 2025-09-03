@@ -107,10 +107,15 @@ def get_fb_live_video(page_id, page_token):
     return None
 
 def fetch_fb_new_comments(video_id, page_token):
+    """
+    Fetch new comments for a Facebook live video in near real-time.
+    Handles paging and prevents missing any messages.
+    """
     global fb_last_comment_time
+    fresh = []
     url = f"{GRAPH}/{video_id}/comments"
     params = {
-        "fields": "id,from{name},message,created_time",
+        "fields": "id,from{id,name},message,created_time",
         "order": "chronological",
         "access_token": page_token,
         "limit": 25,
@@ -118,21 +123,35 @@ def fetch_fb_new_comments(video_id, page_token):
     if fb_last_comment_time:
         params["since"] = fb_last_comment_time
 
-    res = safe_request(url, params)
-    items = res.get("data", [])
-    fresh = []
+    while True:
+        res = safe_request(url, params)
+        items = res.get("data", [])
+        if not items:
+            break
 
-    for c in items:
-        cid = c.get("id")
-        if not cid or cid in fb_seen_comment_ids:
-            continue
-        user = c.get("from", {}).get("name", "Unknown")
-        msg = c.get("message", "")
-        if fb_last_message_by_user.get(user) == msg:
-            continue
-        fb_seen_comment_ids.add(cid)
-        fb_last_message_by_user[user] = msg
-        fresh.append({"title": "Facebook", "user": user, "msg": msg})
+        for c in items:
+            cid = c.get("id")
+            if not cid or cid in fb_seen_comment_ids:
+                continue
+
+            user_info = c.get("from", {})
+            user = user_info.get("name") or user_info.get("id") or "Unknown"
+            msg = c.get("message", "")
+
+            if fb_last_message_by_user.get(user) == msg:
+                continue
+
+            fb_seen_comment_ids.add(cid)
+            fb_last_message_by_user[user] = msg
+            fresh.append({"title": "Facebook", "user": user, "msg": msg})
+
+        # Paging for next batch
+        paging = res.get("paging", {})
+        next_page = paging.get("next")
+        if not next_page:
+            break
+        url = next_page
+        params = {}  # already included in next_page URL
 
     if fresh:
         fb_last_comment_time = items[-1]["created_time"]
@@ -142,6 +161,7 @@ def listen_facebook():
     if not FB_PAGE_TOKEN or not FB_PAGE_ID:
         print("⚠️ FB_PAGE_TOKEN or FB_PAGE_ID not set, skipping Facebook listener")
         return
+
     video_id = None
     while not video_id:
         print("📺 [Facebook] Checking for live video…")
@@ -149,6 +169,7 @@ def listen_facebook():
         if not video_id:
             time.sleep(5)
     print(f"🎯 [Facebook] Active live video ID: {video_id}")
+
     while True:
         new_comments = fetch_fb_new_comments(video_id, FB_PAGE_TOKEN)
         for c in new_comments:
