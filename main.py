@@ -239,10 +239,10 @@ yt_sent_messages = set()
 last_checked_video_id = None
 
 def get_youtube_live_chat_id():
-    """Get liveChatId for an active YouTube livestream."""
+    """Get liveChatId for an active YouTube livestream with minimal quota usage."""
     global last_checked_video_id
     try:
-        # If we already found a live video earlier, reuse it
+        # ✅ Reuse previous video_id if still live
         if last_checked_video_id:
             videos_url = (
                 f"https://www.googleapis.com/youtube/v3/videos"
@@ -255,9 +255,11 @@ def get_youtube_live_chat_id():
             if items:
                 live_chat_id = items[0]["liveStreamingDetails"].get("activeLiveChatId")
                 if live_chat_id:
-                    return live_chat_id  # ✅ Still live, reuse it
+                    return live_chat_id  # still live, reuse
+            # If no longer live, reset cache
+            last_checked_video_id = None
 
-        # Otherwise, call search (expensive API call)
+        # 🔍 Only search if no cached video_id
         print("🔍 Running YouTube search for active livestream...")
         search_url = (
             f"https://www.googleapis.com/youtube/v3/search"
@@ -274,7 +276,7 @@ def get_youtube_live_chat_id():
             return None
 
         video_id = items[0]["id"]["videoId"]
-        last_checked_video_id = video_id  # 🔒 Save for reuse
+        last_checked_video_id = video_id  # cache
 
         videos_url = (
             f"https://www.googleapis.com/youtube/v3/videos"
@@ -300,7 +302,7 @@ def listen_youtube():
         live_chat_id = get_youtube_live_chat_id()
         if not live_chat_id:
             print("⏳ No YouTube live stream detected. Retrying in 30s...")
-            time.sleep(30)  # less frequent search when no stream
+            time.sleep(30)  # reduce quota usage
             continue
 
         print("✅ Connected to YouTube live chat!")
@@ -317,7 +319,7 @@ def listen_youtube():
                     url += f"&pageToken={page_token}"
                 resp = requests.get(url).json()
 
-                # If livestream ended, break back to outer loop
+                # livestream ended → break back to search loop
                 if "error" in resp and resp["error"]["errors"][0]["reason"] == "liveChatEnded":
                     print("⚠️ YouTube live chat ended, restarting search...")
                     break
@@ -331,7 +333,8 @@ def listen_youtube():
                     user = item["authorDetails"]["displayName"]
                     msg = item["snippet"]["displayMessage"]
                     print(f"[YouTube] {user}: {msg}")
-                    send_ntfy("YouTube", f"{user}: {msg}")
+                    # ✅ Use central NTFY queue (same as FB & Kick)
+                    ntfy_queue.put({"title": "YouTube", "user": user, "msg": msg})
                     time.sleep(YOUTUBE_NTFY_DELAY)
 
                 page_token = resp.get("nextPageToken")
