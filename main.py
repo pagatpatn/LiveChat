@@ -81,107 +81,48 @@ def ntfy_worker():
 
 
 # -----------------------------
-# --- Facebook Functions ---
+# --- Facebook Webhook (Flask)
 # -----------------------------
-GRAPH = "https://graph.facebook.com/v20.0"
+from flask import Flask, request
 
-def safe_request(url, params):
-    try:
-        res = requests.get(url, params=params, timeout=10)
-        data = res.json()
-        if "error" in data:
-            print(f"⚠️ API Error: {json.dumps(data, indent=2)}")
-            return {}
-        return data
-    except Exception as e:
-        print(f"❌ Request failed: {e}")
-        return {}
+app = Flask(__name__)
 
-def get_fb_live_video(page_id, page_token):
-    url = f"{GRAPH}/{page_id}/videos"
-    params = {
-        "fields": "id,description,live_status,created_time",
-        "access_token": page_token,
-        "limit": 10,
-    }
-    res = safe_request(url, params)
-    data = res.get("data", [])
-    for v in data:
-        if v.get("live_status") == "LIVE":
-            print(f"✅ [Facebook] Live video found: {v['id']} | {v.get('description','(no desc)')}")
-            return v["id"]
-    return None
+FB_VERIFY_TOKEN = os.getenv("FB_VERIFY_TOKEN", "my_secret")
 
-def fetch_fb_new_comments(video_id, page_token):
-    """
-    Fetch new comments for a Facebook live video in near real-time.
-    Handles paging and prevents missing any messages.
-    """
-    global fb_last_comment_time
-    fresh = []
-    url = f"{GRAPH}/{video_id}/comments"
-    params = {
-        "fields": "id,from{id,name},message,created_time",
-        "order": "chronological",
-        "access_token": page_token,
-        "limit": 25,
-    }
-    if fb_last_comment_time:
-        params["since"] = fb_last_comment_time
+@app.route("/webhook", methods=["GET", "POST"])
+def fb_webhook():
+    if request.method == "GET":
+        # ✅ Verification handshake
+        mode = request.args.get("hub.mode")
+        token = request.args.get("hub.verify_token")
+        challenge = request.args.get("hub.challenge")
 
-    while True:
-        res = safe_request(url, params)
-        items = res.get("data", [])
-        if not items:
-            break
+        if mode == "subscribe" and token == FB_VERIFY_TOKEN:
+            print("✅ [Facebook] Webhook verified successfully")
+            return challenge, 200
+        else:
+            print("❌ [Facebook] Webhook verification failed")
+            return "Verification failed", 403
 
-        for c in items:
-            cid = c.get("id")
-            if not cid or cid in fb_seen_comment_ids:
-                continue
+    if request.method == "POST":
+        # ✅ New comment arrives
+        data = request.get_json()
+        print("📥 [Facebook] Webhook payload:", json.dumps(data, indent=2))
 
-            user_info = c.get("from", {})
-            user = user_info.get("name") or user_info.get("id") or "Unknown"
-            msg = c.get("message", "")
+        for entry in data.get("entry", []):
+            for change in entry.get("changes", []):
+                if change.get("field") == "live_comments":
+                    value = change.get("value", {})
+                    user = value.get("from", {}).get("name", "Unknown")
+                    msg = value.get("message", "")
+                    ts = value.get("created_time")
 
-            if fb_last_message_by_user.get(user) == msg:
-                continue
+                    if msg:
+                        ntfy_queue.put({"title": "Facebook", "user": user, "msg": msg, "time": ts})
+                        print(f"[Facebook] {user}: {msg}")
 
-            fb_seen_comment_ids.add(cid)
-            fb_last_message_by_user[user] = msg
-            fresh.append({"title": "Facebook", "user": user, "msg": msg})
+        return "EVENT_RECEIVED", 200
 
-        # Paging for next batch
-        paging = res.get("paging", {})
-        next_page = paging.get("next")
-        if not next_page:
-            break
-        url = next_page
-        params = {}  # already included in next_page URL
-
-    if fresh:
-        fb_last_comment_time = items[-1]["created_time"]
-    return fresh
-
-def listen_facebook():
-    if not FB_PAGE_TOKEN or not FB_PAGE_ID:
-        print("⚠️ FB_PAGE_TOKEN or FB_PAGE_ID not set, skipping Facebook listener")
-        return
-
-    video_id = None
-    while not video_id:
-        print("📺 [Facebook] Checking for live video…")
-        video_id = get_fb_live_video(FB_PAGE_ID, FB_PAGE_TOKEN)
-        if not video_id:
-            time.sleep(5)
-    print(f"🎯 [Facebook] Active live video ID: {video_id}")
-
-    while True:
-        new_comments = fetch_fb_new_comments(video_id, FB_PAGE_TOKEN)
-        for c in new_comments:
-            print(f"[Facebook] {c['user']}: {c['msg']}")
-            ntfy_queue.put(c)
-        time.sleep(1)
 
 # -----------------------------
 # --- Kick Functions ---
@@ -364,11 +305,12 @@ if __name__ == "__main__":
 
     # Start listeners
     threads = [
-        threading.Thread(target=listen_facebook, daemon=True),
-        threading.Thread(target=listen_kick, daemon=True),
-        threading.Thread(target=listen_youtube, daemon=True)
-    ]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
+    threading.Thread(target=listen_kick, daemon=True),
+    threading.Thread(target=listen_youtube, daemon=True)
+]
+for t in threads:
+    t.start()
+
+# ✅ Run Flask for Facebook webhook
+port = int(os.getenv("PORT", 5000))
+app.run(host="0.0.0.0", port=port)
