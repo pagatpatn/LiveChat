@@ -293,6 +293,7 @@ def get_youtube_live_chat_id():
 
 
 def listen_youtube():
+    global yt_sent_messages
     if not YOUTUBE_API_KEY or not YOUTUBE_CHANNEL_ID:
         print("⚠️ YouTube API details not set, skipping YouTube listener")
         return
@@ -319,9 +320,10 @@ def listen_youtube():
                     url += f"&pageToken={page_token}"
                 resp = requests.get(url).json()
 
-                # livestream ended → break back to search loop
+                # livestream ended → reset & break back to search loop
                 if "error" in resp and resp["error"]["errors"][0]["reason"] == "liveChatEnded":
-                    print("⚠️ YouTube live chat ended, restarting search...")
+                    print("⚠️ YouTube live chat ended, resetting state...")
+                    yt_sent_messages = set()   # 🔄 reset for next stream
                     break
 
                 for item in resp.get("items", []):
@@ -343,7 +345,9 @@ def listen_youtube():
 
             except Exception as e:
                 print("❌ Error in YouTube chat loop:", e)
+                yt_sent_messages = set()  # 🔄 also reset on crash
                 break
+
 
 # -----------------------------
 # --- Main: Run All ---
