@@ -237,7 +237,6 @@ def listen_kick():
 # -----------------------------
 # --- YouTube Functions ---
 # -----------------------------
-
 def get_youtube_live_chat_id():
     try:
         search_url = (
@@ -275,6 +274,48 @@ def get_youtube_live_chat_id():
     except Exception as e:
         print("❌ Error fetching YouTube chat ID:", e)
         return None
+
+
+def listen_youtube():
+    if not YOUTUBE_API_KEY or not YOUTUBE_CHANNEL_ID:
+        print("⚠️ YouTube API details not set, skipping YouTube listener")
+        return
+    while True:
+        print("🔍 Checking YouTube for live stream...")
+        live_chat_id = get_youtube_live_chat_id()
+        if not live_chat_id:
+            print("⏳ No YouTube live stream detected. Retrying in 10s...")
+            time.sleep(10)
+            continue
+        print("✅ Connected to YouTube live chat!")
+        page_token = None
+        while True:
+            try:
+                url = (
+                    f"https://www.googleapis.com/youtube/v3/liveChat/messages"
+                    f"?liveChatId={live_chat_id}"
+                    f"&part=snippet,authorDetails"
+                    f"&key={YOUTUBE_API_KEY}"
+                )
+                if page_token:
+                    url += f"&pageToken={page_token}"
+                resp = requests.get(url).json()
+                for item in resp.get("items", []):
+                    msg_id = item["id"]
+                    if msg_id in yt_sent_messages:
+                        continue
+                    yt_sent_messages.add(msg_id)
+                    user = item["authorDetails"]["displayName"]
+                    msg = item["snippet"]["displayMessage"]
+                    print(f"[YouTube] {user}: {msg}")
+                    ntfy_queue.put({"title": "YouTube", "user": user, "msg": msg})
+                    time.sleep(YOUTUBE_NTFY_DELAY)
+                page_token = resp.get("nextPageToken")
+                polling_interval = resp.get("pollingIntervalMillis", 5000) / 1000
+                time.sleep(polling_interval)
+            except Exception as e:
+                print("❌ Error in YouTube chat loop:", e)
+                break
 
 
 # -----------------------------
