@@ -60,19 +60,25 @@ def ntfy_worker():
             now = time.time()
             if now - last_ntfy_sent < 5:
                 time.sleep(5 - (now - last_ntfy_sent))
-            title = msg_obj.get("title", "Chat")
+
+            title = msg_obj.get("title", "Chat")   # source: YouTube / Kick / Facebook
             user = msg_obj.get("user", "Unknown")
             msg = msg_obj.get("msg", "")
+
+            # ✅ Put full chat text in body, NOT title
+            body = f"{user}: {msg}"
+
             requests.post(
                 f"https://ntfy.sh/{NTFY_TOPIC}",
-                data=f"{user}: {msg}".encode("utf-8"),
-                headers={"Title": title},
+                data=body.encode("utf-8"),
+                headers={"Title": title},  # keep this short so it won’t truncate
                 timeout=5,
             )
             last_ntfy_sent = time.time()
         except Exception as e:
             print("⚠️ Failed to send NTFY:", e)
         ntfy_queue.task_done()
+
 
 # -----------------------------
 # --- Facebook Functions ---
