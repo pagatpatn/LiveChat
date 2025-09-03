@@ -237,6 +237,9 @@ def listen_kick():
 # -----------------------------
 # --- YouTube Functions ---
 # -----------------------------
+# -----------------------------
+# --- YouTube Functions ---
+# -----------------------------
 def get_youtube_live_chat_id():
     try:
         search_url = (
@@ -245,22 +248,14 @@ def get_youtube_live_chat_id():
             f"&channelId={YOUTUBE_CHANNEL_ID}"
             f"&eventType=live"
             f"&type=video"
-            f"&order=date"
             f"&key={YOUTUBE_API_KEY}"
         )
         resp = requests.get(search_url).json()
-
         items = resp.get("items", [])
         if not items:
-            print("⚠️ No live videos found in search.")
             return None
+        video_id = items[0]["id"]["videoId"]
 
-        video_id = items[0]["id"].get("videoId")
-        if not video_id:
-            print("⚠️ No videoId found in search response.")
-            return None
-
-        # Get video details
         videos_url = (
             f"https://www.googleapis.com/youtube/v3/videos"
             f"?part=liveStreamingDetails"
@@ -268,24 +263,52 @@ def get_youtube_live_chat_id():
             f"&key={YOUTUBE_API_KEY}"
         )
         resp2 = requests.get(videos_url).json()
-        items2 = resp2.get("items", [])
-        if not items2:
-            print("⚠️ No details found for video:", video_id)
-            return None
-
-        live_details = items2[0].get("liveStreamingDetails", {})
-        live_chat_id = live_details.get("activeLiveChatId")
-
-        if not live_chat_id:
-            print("⚠️ Video found but no active chat ID (maybe scheduled, not live yet).")
-            return None
-
-        print(f"✅ YouTube live video found: {video_id}")
+        live_chat_id = resp2["items"][0]["liveStreamingDetails"].get("activeLiveChatId")
         return live_chat_id
-
     except Exception as e:
         print("❌ Error fetching YouTube chat ID:", e)
         return None
+
+def listen_youtube():
+    if not YOUTUBE_API_KEY or not YOUTUBE_CHANNEL_ID:
+        print("⚠️ YouTube API details not set, skipping YouTube listener")
+        return
+    while True:
+        print("🔍 Checking YouTube for live stream...")
+        live_chat_id = get_youtube_live_chat_id()
+        if not live_chat_id:
+            print("⏳ No YouTube live stream detected. Retrying in 10s...")
+            time.sleep(10)
+            continue
+        print("✅ Connected to YouTube live chat!")
+        page_token = None
+        while True:
+            try:
+                url = (
+                    f"https://www.googleapis.com/youtube/v3/liveChat/messages"
+                    f"?liveChatId={live_chat_id}"
+                    f"&part=snippet,authorDetails"
+                    f"&key={YOUTUBE_API_KEY}"
+                )
+                if page_token:
+                    url += f"&pageToken={page_token}"
+                resp = requests.get(url).json()
+                for item in resp.get("items", []):
+                    msg_id = item["id"]
+                    if msg_id in yt_sent_messages:
+                        continue
+                    yt_sent_messages.add(msg_id)
+                    user = item["authorDetails"]["displayName"]
+                    msg = item["snippet"]["displayMessage"]
+                    print(f"[YouTube] {user}: {msg}")
+                    ntfy_queue.put({"title": "YouTube", "user": user, "msg": msg})
+                    time.sleep(YOUTUBE_NTFY_DELAY)
+                page_token = resp.get("nextPageToken")
+                polling_interval = resp.get("pollingIntervalMillis", 5000) / 1000
+                time.sleep(polling_interval)
+            except Exception as e:
+                print("❌ Error in YouTube chat loop:", e)
+                break
 
 # -----------------------------
 # --- Main: Run All ---
