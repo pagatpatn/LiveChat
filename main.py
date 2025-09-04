@@ -1,43 +1,92 @@
-# -----------------------------
-# --- Imports ---
-# -----------------------------
-from flask import Flask, request
 import os
-import threading
 import time
 import requests
 import re
+import threading
+import json
 from datetime import datetime, timedelta
 from queue import Queue
+from flask import Flask, request
 from kickapi import KickAPI
 
 # -----------------------------
 # --- Config / Environment ---
 # -----------------------------
-
-FB_PAGE_TOKEN = os.getenv("FB_PAGE_TOKEN")
+# Facebook
+FB_APP_ID = os.getenv("FB_APP_ID")
+FB_APP_SECRET = os.getenv("FB_APP_SECRET")
+FB_USER_TOKEN = os.getenv("FB_USER_TOKEN")  # short-lived user token
 FB_PAGE_ID = os.getenv("FB_PAGE_ID")
 FB_VERIFY_TOKEN = os.getenv("FB_VERIFY_TOKEN", "my_verify_token")
 
+# Kick
 KICK_CHANNEL = os.getenv("KICK_CHANNEL", "")
+KICK_POLL_INTERVAL = 5
 KICK_TIME_WINDOW_MINUTES = 0.1
 
+# YouTube
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
 YOUTUBE_CHANNEL_ID = os.getenv("YOUTUBE_CHANNEL_ID", "")
 YOUTUBE_NTFY_DELAY = 2
 
-ntfy_queue = Queue()
-fb_page_token = None  # will be refreshed automatically
+# NTFY
+NTFY_TOPIC = os.getenv("NTFY_TOPIC", "streamchats123")
 
+# -----------------------------
+# --- Global Tracking ---
+# -----------------------------
+ntfy_queue = Queue()
+last_ntfy_sent = 0
+
+# Facebook
+fb_page_token = None
+
+# Kick
+kick_api = KickAPI()
+kick_seen_ids = set()
+kick_queue = []
+
+# YouTube
+yt_sent_messages = set()
+last_checked_video_id = None
+
+# -----------------------------
+# --- NTFY Worker ---
+# -----------------------------
+def ntfy_worker():
+    global last_ntfy_sent
+    while True:
+        msg_obj = ntfy_queue.get()
+        if msg_obj is None:
+            break
+        try:
+            now = time.time()
+            if now - last_ntfy_sent < 5:
+                time.sleep(5 - (now - last_ntfy_sent))
+            title = msg_obj.get("title", "Chat")
+            user = msg_obj.get("user", "Unknown")
+            msg = msg_obj.get("msg", "")
+            body = f"{user}: {msg}"
+            requests.post(
+                f"https://ntfy.sh/{NTFY_TOPIC}",
+                data=body.encode("utf-8"),
+                headers={"Title": title},
+                timeout=5,
+            )
+            last_ntfy_sent = time.time()
+        except Exception as e:
+            print("⚠️ Failed to send NTFY:", e)
+        ntfy_queue.task_done()
+
+# -----------------------------
+# --- Facebook Webhook ---
+# -----------------------------
 fb_app = Flask(__name__)
 
-# -----------------------------
-# --- Refresh Page Token ---
-# -----------------------------
 def refresh_page_token():
     global fb_page_token
     try:
-        # Step 1: exchange short-lived user token for long-lived user token
+        # 1️⃣ Get long-lived user token
         exchange_url = (
             f"https://graph.facebook.com/v20.0/oauth/access_token"
             f"?grant_type=fb_exchange_token"
@@ -51,44 +100,34 @@ def refresh_page_token():
             print("❌ Failed to get long-lived user token:", resp)
             return False
 
-        # Step 2: get page token using long-lived user token
+        # 2️⃣ Get page token
         accounts_url = f"https://graph.facebook.com/v20.0/me/accounts?access_token={long_lived_user_token}"
         res2 = requests.get(accounts_url).json()
         pages = res2.get("data", [])
         for page in pages:
             if page.get("id") == FB_PAGE_ID:
                 fb_page_token = page.get("access_token")
-                print("✅ Page access token refreshed successfully!")
+                print("✅ Page access token refreshed!")
                 return True
-
         print("❌ Page not found in accounts:", res2)
         return False
     except Exception as e:
         print("❌ Exception refreshing page token:", e)
         return False
 
-# -----------------------------
-# --- Subscribe Page to Webhooks ---
-# -----------------------------
 def subscribe_facebook_page():
     global fb_page_token
     if not fb_page_token or not FB_PAGE_ID:
         print("⚠️ Cannot subscribe webhook: page token or page ID missing")
         return
     url = f"https://graph.facebook.com/v20.0/{FB_PAGE_ID}/subscribed_apps"
-    params = {
-        "access_token": fb_page_token,
-        "subscribed_fields": "live_videos"  # only live videos
-    }
+    params = {"access_token": fb_page_token, "subscribed_fields": "live_videos"}
     try:
         res = requests.post(url, params=params).json()
         print("📡 Facebook webhook subscription result:", res)
     except Exception as e:
         print("❌ Failed to subscribe webhook:", e)
 
-# -----------------------------
-# --- Facebook Webhook Route ---
-# -----------------------------
 @fb_app.route("/webhook", methods=["GET", "POST"])
 def facebook_webhook():
     if request.method == "GET":
@@ -97,7 +136,7 @@ def facebook_webhook():
         challenge = request.args.get("hub.challenge")
         print(f"📩 Verification attempt: mode={mode}, token={token}")
         if mode == "subscribe" and token == FB_VERIFY_TOKEN:
-            print("✅ Facebook webhook verified successfully!")
+            print("✅ Facebook webhook verified!")
             return challenge, 200
         print("❌ Verification failed!")
         return "Verification failed", 403
@@ -122,23 +161,10 @@ def facebook_webhook():
         return "OK", 200
 
 # -----------------------------
-# --- Initialization ---
-# -----------------------------
-def start_facebook_webhook():
-    success = refresh_page_token()
-    if success:
-        subscribe_facebook_page()
-    else:
-        print("⚠️ Could not refresh page token. Webhook subscription skipped.")
-
-# -----------------------------
 # --- Kick Listener ---
 # -----------------------------
-kick_api = KickAPI()
-kick_seen_ids = set()
-kick_queue = []
-emoji_pattern = r"\[emote:(\d+):([^\]]+)\]"
 EMOJI_MAP = {"GiftedYAY":"🎉","ErectDance":"💃"}
+emoji_pattern = r"\[emote:(\d+):([^\]]+)\]"
 
 def extract_emoji(text: str) -> str:
     matches = re.findall(emoji_pattern, text)
@@ -156,11 +182,11 @@ def get_kick_chat(channel_id: int):
         messages = []
         if chat and hasattr(chat, "messages") and chat.messages:
             for msg in chat.messages:
-                message_text = msg.text if hasattr(msg, "text") else "No text"
+                message_text = getattr(msg, "text", "No text")
                 message_text = extract_emoji(message_text)
                 messages.append({
-                    "id": msg.id if hasattr(msg, "id") else f"{msg.sender.username}:{message_text}",
-                    "username": msg.sender.username if hasattr(msg, "sender") else "Unknown",
+                    "id": getattr(msg, "id", f"{msg.sender.username}:{message_text}"),
+                    "username": getattr(msg.sender, "username", "Unknown"),
                     "text": message_text,
                     "timestamp": datetime.now().strftime("%H:%M:%S"),
                 })
@@ -194,16 +220,14 @@ def listen_kick():
 # -----------------------------
 # --- YouTube Listener ---
 # -----------------------------
-yt_sent_messages = set()
-last_checked_video_id = None
-
 def get_youtube_live_chat_id():
     global last_checked_video_id
     try:
         if last_checked_video_id:
             videos_url = (
                 f"https://www.googleapis.com/youtube/v3/videos"
-                f"?part=liveStreamingDetails&id={last_checked_video_id}"
+                f"?part=liveStreamingDetails"
+                f"&id={last_checked_video_id}"
                 f"&key={YOUTUBE_API_KEY}"
             )
             resp = requests.get(videos_url).json()
@@ -214,21 +238,27 @@ def get_youtube_live_chat_id():
                     return live_chat_id
             last_checked_video_id = None
 
-        print("🔍 Searching YouTube for live stream...")
         search_url = (
             f"https://www.googleapis.com/youtube/v3/search"
-            f"?part=snippet&channelId={YOUTUBE_CHANNEL_ID}&eventType=live&type=video&maxResults=1&key={YOUTUBE_API_KEY}"
+            f"?part=snippet"
+            f"&channelId={YOUTUBE_CHANNEL_ID}"
+            f"&eventType=live"
+            f"&type=video"
+            f"&maxResults=1"
+            f"&key={YOUTUBE_API_KEY}"
         )
         resp = requests.get(search_url).json()
         items = resp.get("items", [])
         if not items:
             return None
-
         video_id = items[0]["id"]["videoId"]
         last_checked_video_id = video_id
+
         videos_url = (
             f"https://www.googleapis.com/youtube/v3/videos"
-            f"?part=liveStreamingDetails&id={video_id}&key={YOUTUBE_API_KEY}"
+            f"?part=liveStreamingDetails"
+            f"&id={video_id}"
+            f"&key={YOUTUBE_API_KEY}"
         )
         resp2 = requests.get(videos_url).json()
         live_chat_id = resp2["items"][0]["liveStreamingDetails"].get("activeLiveChatId")
@@ -240,33 +270,29 @@ def get_youtube_live_chat_id():
 def listen_youtube():
     global yt_sent_messages
     if not YOUTUBE_API_KEY or not YOUTUBE_CHANNEL_ID:
-        print("⚠️ YouTube API details not set, skipping YouTube listener")
+        print("⚠️ YouTube API not set, skipping listener")
         return
-
     while True:
         live_chat_id = get_youtube_live_chat_id()
         if not live_chat_id:
-            print("⏳ No YouTube live stream detected. Retrying in 30s...")
+            print("⏳ No YouTube live stream, retrying in 30s...")
             time.sleep(30)
             continue
-
-        print("✅ Connected to YouTube live chat!")
         page_token = None
         while True:
             try:
                 url = (
                     f"https://www.googleapis.com/youtube/v3/liveChat/messages"
-                    f"?liveChatId={live_chat_id}&part=snippet,authorDetails&key={YOUTUBE_API_KEY}"
+                    f"?liveChatId={live_chat_id}"
+                    f"&part=snippet,authorDetails"
+                    f"&key={YOUTUBE_API_KEY}"
                 )
                 if page_token:
                     url += f"&pageToken={page_token}"
                 resp = requests.get(url).json()
-
                 if "error" in resp and resp["error"]["errors"][0]["reason"] == "liveChatEnded":
-                    print("⚠️ YouTube live chat ended, resetting state...")
                     yt_sent_messages = set()
                     break
-
                 for item in resp.get("items", []):
                     msg_id = item["id"]
                     if msg_id in yt_sent_messages:
@@ -277,7 +303,6 @@ def listen_youtube():
                     print(f"[YouTube] {user}: {msg}")
                     ntfy_queue.put({"title": "YouTube", "user": user, "msg": msg})
                     time.sleep(YOUTUBE_NTFY_DELAY)
-
                 page_token = resp.get("nextPageToken")
                 polling_interval = resp.get("pollingIntervalMillis", 5000) / 1000
                 time.sleep(polling_interval)
@@ -287,15 +312,17 @@ def listen_youtube():
                 break
 
 # -----------------------------
-# --- Start All Background Listeners ---
+# --- Start All Listeners ---
 # -----------------------------
 def start_all_listeners():
     print("🚀 Starting all background listeners...")
     threading.Thread(target=ntfy_worker, daemon=True).start()
     threading.Thread(target=listen_kick, daemon=True).start()
     threading.Thread(target=listen_youtube, daemon=True).start()
-    subscribe_facebook_page()
+    success = refresh_page_token()
+    if success:
+        subscribe_facebook_page()
     print("✅ All background listeners started.")
 
-# Start immediately when module is imported (Gunicorn friendly)
+# Start listeners in background
 threading.Thread(target=start_all_listeners, daemon=True).start()
