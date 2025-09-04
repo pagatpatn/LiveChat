@@ -89,7 +89,7 @@ def ntfy_worker():
         ntfy_queue.task_done()
 
 # -----------------------------
-# --- Facebook Section (SSE + Live Video Detection) ---
+# --- Facebook Listener (SSE) ---
 # -----------------------------
 GRAPH_API = "https://graph.facebook.com/v20.0"
 GRAPH_STREAM = "https://streaming-graph.facebook.com/v20.0"
@@ -112,6 +112,7 @@ def get_fb_live_video_id(page_id, page_token):
     return None
 
 def listen_facebook():
+    """Listen to live comments via SSE with auto-reconnect."""
     if not FB_PAGE_TOKEN or not FB_PAGE_ID:
         print("⚠️ FB_PAGE_TOKEN or FB_PAGE_ID not set, skipping Facebook listener")
         return
@@ -119,28 +120,28 @@ def listen_facebook():
     while True:
         video_id = get_fb_live_video_id(FB_PAGE_ID, FB_PAGE_TOKEN)
         if not video_id:
-            print("⏳ [Facebook] No active live video, retrying in 10s...")
+            print("⏳ [Facebook] No active live video found, retrying in 10s...")
             time.sleep(10)
             continue
 
         print(f"🎥 [Facebook] Live video detected! Video ID: {video_id}")
 
-        # Build URL manually, keep {} literal
+        # ⚠ Build URL manually to preserve literal curly braces
         url = (
-    f"https://streaming-graph.facebook.com/v20.0/{video_id}/live_comments"
-    f"?access_token={FB_PAGE_TOKEN}"
-    f"&comment_rate=one_per_five_seconds"
-    f"&fields=from{{name,id}},message"  # note the double {{ and }}
-)
-
+            f"{GRAPH_STREAM}/{video_id}/live_comments"
+            f"?access_token={FB_PAGE_TOKEN}"
+            f"&comment_rate=one_per_five_seconds"
+            f"&fields=from{{name,id}},message"  # literal {} required
+        )
 
         try:
             print(f"📡 [Facebook] Connecting to SSE stream for video {video_id}...")
-            res = requests.get(url, stream=True, timeout=60)
-            res.raise_for_status()
-            client = sseclient.SSEClient(res)
-            print("✅ [Facebook] Connected to live_comments SSE stream!")
+            session = requests.Session()
+            res = session.get(url, stream=True, timeout=60)
+            res.raise_for_status()  # will raise if HTTP error
 
+            print("✅ [Facebook] Successfully connected to live_comments SSE stream!")
+            client = sseclient.SSEClient(res)
             for event in client.events():
                 if not event.data or event.data == "null":
                     continue
@@ -159,8 +160,6 @@ def listen_facebook():
 
         print("⏳ [Facebook] Reconnecting in 5 seconds...")
         time.sleep(5)
-
-
 
 # -----------------------------
 # --- Kick Listener ---
