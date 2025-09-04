@@ -13,8 +13,10 @@ from flask import Flask, jsonify
 # --- Config / Env Variables ---
 # -----------------------------
 # Facebook
-FB_PAGE_TOKEN = os.getenv("FB_PAGE_TOKEN")
-FB_PAGE_ID = os.getenv("FB_PAGE_ID")
+FB_APP_ID = os.getenv("FB_APP_ID")
+FB_APP_SECRET = os.getenv("FB_APP_SECRET")
+FB_PAGE_TOKEN = os.getenv("FB_PAGE_TOKEN")          # long-lived token
+FB_VERIFY_TOKEN = os.getenv("FB_VERIFY_TOKEN")      # webhook verify token
 # Kick
 KICK_CHANNEL = os.getenv("KICK_CHANNEL", "")
 KICK_TIME_WINDOW_MINUTES = 0.1
