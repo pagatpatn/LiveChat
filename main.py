@@ -82,20 +82,20 @@ def ntfy_worker():
         ntfy_queue.task_done()
 
 
-# -----------------------------
-# --- Facebook Webhook Section ---
-# -----------------------------
 
-# Reuse your existing NTFY queue
-ntfy_queue = Queue()
+# -----------------------------
+# --- Config / Environment ---
+# -----------------------------
+ntfy_queue = Queue()  # reuse your central NTFY queue
 
-# Flask app for webhook
-# Flask app for webhook
+# -----------------------------
+# --- Flask App for Webhook ---
+# -----------------------------
 fb_app = Flask(__name__)
 
 @fb_app.route("/webhook", methods=["GET", "POST"])
 def facebook_webhook():
-    # --- Verification handshake ---
+    # --- Verification handshake (GET) ---
     if request.method == "GET":
         mode = request.args.get("hub.mode")
         token = request.args.get("hub.verify_token")
@@ -105,7 +105,7 @@ def facebook_webhook():
             return challenge, 200
         return "Verification failed", 403
 
-    # --- Incoming events ---
+    # --- Incoming events (POST) ---
     if request.method == "POST":
         data = request.json
         for entry in data.get("entry", []):
@@ -114,26 +114,27 @@ def facebook_webhook():
                 field = change.get("field")
                 value = change.get("value", {})
 
-                # Handle live videos & their comments
+                # Handle live videos and extract comments
                 if field == "live_videos":
                     video_id = value.get("id")
                     desc = value.get("description", "(no description)")
                     print(f"🎬 [Facebook] Live video started: {video_id} | {desc}")
 
-                    # Extract comments if present
+                    # Extract comments if present in payload
                     comments = value.get("comments", {}).get("data", [])
                     for comment in comments:
                         user = comment.get("from", {}).get("name", "Unknown")
                         msg = comment.get("message", "")
                         print(f"[Facebook] {user}: {msg}")
                         ntfy_queue.put({"title": "Facebook", "user": user, "msg": msg})
-
         return "OK", 200
 
 
+# -----------------------------
 # --- Subscribe Page to Webhooks ---
+# -----------------------------
 def subscribe_facebook_page():
-    import requests
+    """Subscribe your page to live_videos events (required once)."""
     if not FB_PAGE_TOKEN or not FB_PAGE_ID:
         print("⚠️ FB_PAGE_TOKEN or FB_PAGE_ID not set, cannot subscribe webhook")
         return
@@ -141,7 +142,7 @@ def subscribe_facebook_page():
     url = f"https://graph.facebook.com/v20.0/{FB_PAGE_ID}/subscribed_apps"
     params = {
         "access_token": FB_PAGE_TOKEN,
-        "subscribed_fields": "live_videos"  # ✅ only live_videos
+        "subscribed_fields": "live_videos"  # ✅ Only live_videos
     }
     try:
         res = requests.post(url, params=params)
@@ -151,17 +152,22 @@ def subscribe_facebook_page():
         print("❌ Failed to subscribe Facebook webhook:", e)
 
 
+# -----------------------------
 # --- Run Flask server in a thread ---
+# -----------------------------
 def run_facebook_webhook_server():
     fb_app.run(host="0.0.0.0", port=5000)
 
 
+# -----------------------------
 # --- Initialize Facebook Webhook ---
+# -----------------------------
 def init_facebook_webhook():
     # Subscribe page (one-time)
     subscribe_facebook_page()
-    # Start Flask webhook server
+    # Start Flask webhook server in a daemon thread
     threading.Thread(target=run_facebook_webhook_server, daemon=True).start()
+
 
 
 # -----------------------------
