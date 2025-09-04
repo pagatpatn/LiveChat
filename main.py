@@ -111,54 +111,29 @@ def get_fb_live_video_id(page_id, page_token):
         print("⚠️ Error fetching FB live video:", e)
     return None
 
-def listen_facebook():
-    """Listen to live comments via SSE with auto-reconnect."""
-    if not FB_PAGE_TOKEN or not FB_PAGE_ID:
-        print("⚠️ FB_PAGE_TOKEN or FB_PAGE_ID not set, skipping Facebook listener")
-        return
-
+def listen_facebook_polling():
+    last_seen = set()
     while True:
         video_id = get_fb_live_video_id(FB_PAGE_ID, FB_PAGE_TOKEN)
         if not video_id:
-            print("⏳ [Facebook] No active live video found, retrying in 10s...")
             time.sleep(10)
             continue
-
-        print(f"🎥 [Facebook] Live video detected! Video ID: {video_id}")
-
-        # ⚠ Build URL manually to preserve literal curly braces
-        url = (
-            f"{GRAPH_STREAM}/{video_id}/live_comments"
-            f"?access_token={FB_PAGE_TOKEN}"
-            f"&comment_rate=one_per_five_seconds"
-            f"&fields=from{{name,id}},message"  # literal {} required
-        )
-
+        url = f"https://graph.facebook.com/v20.0/{video_id}/comments"
+        params = {"access_token": FB_PAGE_TOKEN, "order": "chronological"}
         try:
-            print(f"📡 [Facebook] Connecting to SSE stream for video {video_id}...")
-            session = requests.Session()
-            res = session.get(url, stream=True, timeout=60)
-            res.raise_for_status()  # will raise if HTTP error
-
-            print("✅ [Facebook] Successfully connected to live_comments SSE stream!")
-            client = sseclient.SSEClient(res)
-            for event in client.events():
-                if not event.data or event.data == "null":
+            resp = requests.get(url, params=params, timeout=10).json()
+            for comment in resp.get("data", []):
+                cid = comment["id"]
+                if cid in last_seen:
                     continue
-                try:
-                    data = json.loads(event.data)
-                    user = data.get("from", {}).get("name") or data.get("from", {}).get("id") or "Unknown"
-                    msg = data.get("message", "")
-                    if msg.strip():
-                        print(f"[Facebook] {user}: {msg}")
-                        ntfy_queue.put({"title": "Facebook", "user": user, "msg": msg})
-                except Exception as inner_e:
-                    print("⚠️ Error parsing FB SSE event:", inner_e)
-
+                last_seen.add(cid)
+                user = comment.get("from", {}).get("name", "Unknown")
+                msg = comment.get("message", "")
+                if msg:
+                    print(f"[Facebook] {user}: {msg}")
+                    ntfy_queue.put({"title": "Facebook", "user": user, "msg": msg})
         except Exception as e:
-            print("❌ [Facebook] SSE connection error:", e)
-
-        print("⏳ [Facebook] Reconnecting in 5 seconds...")
+            print("❌ Error polling Facebook comments:", e)
         time.sleep(5)
 
 # -----------------------------
