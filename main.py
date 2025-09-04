@@ -125,12 +125,12 @@ def listen_facebook():
 
         print(f"🎥 [Facebook] Live video detected! Video ID: {video_id}")
 
-        # SSE URL with proper fields encoding and safer comment_rate
+        # SSE URL with correct fields formatting
         url = f"{GRAPH_STREAM}/{video_id}/live_comments"
         params = {
             "access_token": FB_PAGE_TOKEN,
-            "comment_rate": "one_per_five_seconds",  # safer for API
-            "fields": "from{{name,id}},message"      # double braces to escape f-string
+            "comment_rate": "one_per_five_seconds",  # safe
+            "fields": "from{name,id},message"        # correct
         }
 
         try:
@@ -157,6 +157,7 @@ def listen_facebook():
 
         print("⏳ [Facebook] Reconnecting in 5 seconds...")
         time.sleep(5)
+
 
 # -----------------------------
 # --- Kick Listener ---
