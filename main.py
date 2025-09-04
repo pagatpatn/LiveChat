@@ -364,10 +364,11 @@ def listen_youtube():
 
 
 # -----------------------------
-# --- Main: Run All Listeners -
+# --- Main: Run All Listeners ---
+# -----------------------------
 
-# Assuming the previous sections are imported:
-# init_facebook_webhook(), listen_kick(), listen_youtube(), ntfy_worker
+# Assume the following are already imported:
+# init_facebook_webhook(), listen_kick(), listen_youtube(), ntfy_worker, ntfy_queue
 
 if __name__ == "__main__":
     print("🚀 Starting all listeners...")
@@ -379,13 +380,13 @@ if __name__ == "__main__":
     # Initialize Facebook webhook
     init_facebook_webhook()
 
-    # Start Kick & YouTube listeners in separate threads
+    # Start Kick listener
     kick_thread = threading.Thread(target=listen_kick, daemon=True)
-    youtube_thread = threading.Thread(target=listen_youtube, daemon=True)
-
     kick_thread.start()
     print("✅ Kick listener started.")
 
+    # Start YouTube listener
+    youtube_thread = threading.Thread(target=listen_youtube, daemon=True)
     youtube_thread.start()
     print("✅ YouTube listener started.")
 
@@ -394,5 +395,4 @@ if __name__ == "__main__":
         while True:
             threading.Event().wait(1)
     except KeyboardInterrupt:
-        print("🛑 Shutting down listeners...")
-
+        print("🛑 Shutting down all listeners...")
