@@ -117,7 +117,12 @@ def listen_facebook():
             continue
         print(f"🎥 [Facebook] Live video detected! Video ID: {video_id}")
         url = f"{GRAPH_STREAM}/{video_id}/live_comments"
-        params = {"access_token": FB_PAGE_TOKEN,"comment_rate": "one_per_two_seconds","fields": "from{name,id},message"}
+       params = {
+    "access_token": FB_PAGE_TOKEN,
+    "comment_rate": "one_per_five_seconds",
+    "fields": "from{{name,id}},message"  # double braces to escape in f-string
+}
+
         try:
             res = requests.get(url, params=params, stream=True, timeout=60)
             res.raise_for_status()
