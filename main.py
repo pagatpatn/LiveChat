@@ -88,50 +88,6 @@ def ntfy_worker():
         ntfy_queue.task_done()
 
 # -----------------------------
-# --- Facebook Webhook (Railway-ready) ---
-# -----------------------------
-app = Flask(__name__)
-
-FB_VERIFY_TOKEN = os.getenv("FB_VERIFY_TOKEN")  # your verify token
-
-@app.route("/webhook", methods=["GET", "POST"])
-def fb_webhook():
-    if request.method == "GET":
-        # Verification challenge from Facebook
-        mode = request.args.get("hub.mode")
-        token = request.args.get("hub.verify_token")
-        challenge = request.args.get("hub.challenge")
-        if mode == "subscribe" and token == FB_VERIFY_TOKEN:
-            print("✅ Facebook webhook verified")
-            return challenge, 200
-        else:
-            print("❌ Facebook webhook verification failed")
-            return "Forbidden", 403
-
-    if request.method == "POST":
-        data = request.get_json()
-        if not data:
-            return "No data", 400
-
-        # Facebook may send multiple entries in "entry" array
-        for entry in data.get("entry", []):
-            for change in entry.get("changes", []):
-                value = change.get("value", {})
-                comment_id = value.get("comment_id")
-                message = value.get("message")
-                sender_name = value.get("from", {}).get("name", "Unknown")
-                if message and comment_id and comment_id not in fb_seen_comment_ids:
-                    fb_seen_comment_ids.add(comment_id)
-                    print(f"[Facebook Webhook] {sender_name}: {message}")
-                    ntfy_queue.put({
-                        "title": "Facebook",
-                        "user": sender_name,
-                        "msg": message
-                    })
-
-        return "OK", 200
-    
-# -----------------------------
 # --- Kick Listener ---
 # -----------------------------
 EMOJI_MAP = {"GiftedYAY":"🎉","ErectDance":"💃"}
@@ -259,12 +215,73 @@ def listen_youtube():
                 yt_sent_messages = set()
                 break
 
+
+# -----------------------------
+# --- Facebook Webhook (Flask) ---
+# -----------------------------
+app = Flask(__name__)
+
+@app.route("/fb_webhook", methods=["GET"])
+def fb_verify():
+    """Webhook verification"""
+    verify_token = request.args.get("hub.verify_token")
+    challenge = request.args.get("hub.challenge")
+    if verify_token == FB_VERIFY_TOKEN:
+        return challenge
+    return "Invalid verify token", 403
+
+@app.route("/fb_webhook", methods=["POST"])
+def fb_webhook():
+    data = request.get_json()
+    try:
+        for entry in data.get("entry", []):
+            for comment in entry.get("changes", []):
+                user = comment.get("value", {}).get("from", {}).get("name", "Unknown")
+                msg = comment.get("value", {}).get("message", "")
+                if msg:
+                    ntfy_queue.put({"title": "Facebook", "user": user, "msg": msg})
+    except Exception as e:
+        print("⚠️ FB webhook parsing error:", e)
+    return "OK", 200
+
+def refresh_fb_token():
+    """Automatically refresh long-lived Page token every day"""
+    global FB_PAGE_TOKEN
+    try:
+        url = (
+            f"https://graph.facebook.com/v20.0/oauth/access_token"
+            f"?grant_type=fb_exchange_token"
+            f"&client_id={FB_APP_ID}"
+            f"&client_secret={FB_APP_SECRET}"
+            f"&fb_exchange_token={FB_PAGE_TOKEN}"
+        )
+        res = requests.get(url).json()
+        new_token = res.get("access_token")
+        if new_token:
+            print("✅ FB token refreshed")
+            FB_PAGE_TOKEN = new_token
+    except Exception as e:
+        print("⚠️ Failed to refresh FB token:", e)
+
+def fb_token_refresher():
+    while True:
+        refresh_fb_token()
+        time.sleep(24 * 3600)  # refresh once a day
+
+# -----------------------------
+# --- Main ---
+# -----------------------------
 if __name__ == "__main__":
     # Start NTFY worker
     threading.Thread(target=ntfy_worker, daemon=True).start()
+    
+    # Start background token refresher
+    threading.Thread(target=fb_token_refresher, daemon=True).start()
 
-    # Start Flask server for Facebook Webhook
+    # Start Kick and YouTube listeners
+    threading.Thread(target=listen_kick, daemon=True).start()
+    threading.Thread(target=listen_youtube, daemon=True).start()
+
+    # Start Flask webhook server
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-
-
