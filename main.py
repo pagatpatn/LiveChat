@@ -86,7 +86,6 @@ def ntfy_worker():
 # --- Facebook Webhook Section (Railway Ready with Logging) ---
 # -----------------------------
 
-
 # -----------------------------
 # --- Config / Environment ---
 # -----------------------------
@@ -170,6 +169,26 @@ def init_facebook_webhook():
     # Subscribe page (one-time)
     subscribe_facebook_page()
     print("📡 Facebook webhook initialized. Ready to receive events.")
+
+
+# -----------------------------
+# --- Railway / Gunicorn Deployment Notes ---
+# -----------------------------
+"""
+1. Remove any fb_app.run(...) lines — Gunicorn will serve the app.
+2. Install Gunicorn in requirements.txt:
+   Flask
+   requests
+   gunicorn
+3. Set Railway start command:
+   gunicorn main:fb_app --bind 0.0.0.0:$PORT
+   (Replace 'main' with your Python filename without .py)
+4. Ensure environment variables are set:
+   FB_PAGE_TOKEN, FB_PAGE_ID, FB_VERIFY_TOKEN, NTFY_TOPIC
+5. Use Railway public URL as callback:
+   https://livechat-production-ac8a.up.railway.app/webhook
+6. All incoming events and comments will be logged and pushed to ntfy_queue.
+"""
 
 
 # -----------------------------
