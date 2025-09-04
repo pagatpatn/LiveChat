@@ -14,7 +14,6 @@ from kickapi import KickAPI
 # -----------------------------
 # --- Config / Environment ---
 # -----------------------------
-ntfy_queue = Queue()
 
 FB_PAGE_TOKEN = os.getenv("FB_PAGE_TOKEN")
 FB_PAGE_ID = os.getenv("FB_PAGE_ID")
@@ -27,10 +26,65 @@ YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
 YOUTUBE_CHANNEL_ID = os.getenv("YOUTUBE_CHANNEL_ID", "")
 YOUTUBE_NTFY_DELAY = 2
 
-# -----------------------------
-# --- Flask App for Webhook ---
-# -----------------------------
+ntfy_queue = Queue()
+fb_page_token = None  # will be refreshed automatically
+
 fb_app = Flask(__name__)
+
+# -----------------------------
+# --- Refresh Page Token ---
+# -----------------------------
+def refresh_page_token():
+    global fb_page_token
+    try:
+        # Step 1: exchange short-lived user token for long-lived user token
+        exchange_url = (
+            f"https://graph.facebook.com/v20.0/oauth/access_token"
+            f"?grant_type=fb_exchange_token"
+            f"&client_id={FB_APP_ID}"
+            f"&client_secret={FB_APP_SECRET}"
+            f"&fb_exchange_token={FB_USER_TOKEN}"
+        )
+        resp = requests.get(exchange_url).json()
+        long_lived_user_token = resp.get("access_token")
+        if not long_lived_user_token:
+            print("❌ Failed to get long-lived user token:", resp)
+            return False
+
+        # Step 2: get page token using long-lived user token
+        accounts_url = f"https://graph.facebook.com/v20.0/me/accounts?access_token={long_lived_user_token}"
+        res2 = requests.get(accounts_url).json()
+        pages = res2.get("data", [])
+        for page in pages:
+            if page.get("id") == FB_PAGE_ID:
+                fb_page_token = page.get("access_token")
+                print("✅ Page access token refreshed successfully!")
+                return True
+
+        print("❌ Page not found in accounts:", res2)
+        return False
+    except Exception as e:
+        print("❌ Exception refreshing page token:", e)
+        return False
+
+# -----------------------------
+# --- Subscribe Page to Webhooks ---
+# -----------------------------
+def subscribe_facebook_page():
+    global fb_page_token
+    if not fb_page_token or not FB_PAGE_ID:
+        print("⚠️ Cannot subscribe webhook: page token or page ID missing")
+        return
+    url = f"https://graph.facebook.com/v20.0/{FB_PAGE_ID}/subscribed_apps"
+    params = {
+        "access_token": fb_page_token,
+        "subscribed_fields": "live_videos"  # only live videos
+    }
+    try:
+        res = requests.post(url, params=params).json()
+        print("📡 Facebook webhook subscription result:", res)
+    except Exception as e:
+        print("❌ Failed to subscribe webhook:", e)
 
 # -----------------------------
 # --- Facebook Webhook Route ---
@@ -41,7 +95,7 @@ def facebook_webhook():
         mode = request.args.get("hub.mode")
         token = request.args.get("hub.verify_token")
         challenge = request.args.get("hub.challenge")
-        print(f"📩 Verification attempt: mode={mode}, token={token}, challenge={challenge}")
+        print(f"📩 Verification attempt: mode={mode}, token={token}")
         if mode == "subscribe" and token == FB_VERIFY_TOKEN:
             print("✅ Facebook webhook verified successfully!")
             return challenge, 200
@@ -52,72 +106,30 @@ def facebook_webhook():
         data = request.json
         print(f"📩 Incoming POST from Facebook: {data}")
         for entry in data.get("entry", []):
-            changes = entry.get("changes", [])
-            for change in changes:
+            for change in entry.get("changes", []):
                 field = change.get("field")
                 value = change.get("value", {})
-
                 if field == "live_videos":
                     video_id = value.get("id")
                     desc = value.get("description", "(no description)")
                     print(f"🎬 [Facebook] Live video started: {video_id} | {desc}")
-
                     comments = value.get("comments", {}).get("data", [])
                     for comment in comments:
                         user = comment.get("from", {}).get("name", "Unknown")
                         msg = comment.get("message", "")
                         print(f"[Facebook] {user}: {msg}")
                         ntfy_queue.put({"title": "Facebook", "user": user, "msg": msg})
-
         return "OK", 200
 
 # -----------------------------
-# --- Facebook Page Subscription ---
+# --- Initialization ---
 # -----------------------------
-def subscribe_facebook_page():
-    if not FB_PAGE_TOKEN or not FB_PAGE_ID:
-        print("⚠️ FB_PAGE_TOKEN or FB_PAGE_ID not set, cannot subscribe webhook")
-        return
-    url = f"https://graph.facebook.com/v20.0/{FB_PAGE_ID}/subscribed_apps"
-    params = {
-        "access_token": FB_PAGE_TOKEN,
-        "subscribed_fields": "live_videos"
-    }
-    try:
-        res = requests.post(url, params=params)
-        result = res.json()
-        print("📡 Facebook webhook subscription result:", result)
-    except Exception as e:
-        print("❌ Failed to subscribe Facebook webhook:", e)
-
-# -----------------------------
-# --- NTFY Worker ---
-# -----------------------------
-last_ntfy_sent = 0
-def ntfy_worker():
-    global last_ntfy_sent
-    while True:
-        msg_obj = ntfy_queue.get()
-        if msg_obj is None:
-            break
-        try:
-            now = time.time()
-            if now - last_ntfy_sent < 5:
-                time.sleep(5 - (now - last_ntfy_sent))
-            title = msg_obj.get("title", "Chat")
-            user = msg_obj.get("user", "Unknown")
-            msg = msg_obj.get("msg", "")
-            body = f"{user}: {msg}"
-            requests.post(
-                f"https://ntfy.sh/{os.getenv('NTFY_TOPIC','streamchats123')}",
-                data=body.encode("utf-8"),
-                headers={"Title": title},
-                timeout=5,
-            )
-            last_ntfy_sent = time.time()
-        except Exception as e:
-            print("⚠️ Failed to send NTFY:", e)
-        ntfy_queue.task_done()
+def start_facebook_webhook():
+    success = refresh_page_token()
+    if success:
+        subscribe_facebook_page()
+    else:
+        print("⚠️ Could not refresh page token. Webhook subscription skipped.")
 
 # -----------------------------
 # --- Kick Listener ---
