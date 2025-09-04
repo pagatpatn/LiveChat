@@ -1,6 +1,6 @@
 KickApi
 websocket-client
 emoji
-flask
+Flask
 requests
 gunicorn
