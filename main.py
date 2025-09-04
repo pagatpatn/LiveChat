@@ -81,7 +81,7 @@ def ntfy_worker():
 
 
 # -----------------------------
-# --- Facebook (SSE Version with Live Video Detection) ---
+# --- Facebook (SSE Version with Live Video Detection + Confirmations) ---
 # -----------------------------
 import sseclient
 
@@ -118,6 +118,8 @@ def listen_facebook():
             time.sleep(10)
             continue
 
+        print(f"🎥 [Facebook] Live video detected! Video ID: {video_id}")
+
         url = f"{GRAPH_STREAM}/{video_id}/live_comments"
         params = {
             "access_token": FB_PAGE_TOKEN,
@@ -129,8 +131,9 @@ def listen_facebook():
             print(f"📡 [Facebook] Connecting to SSE stream for video {video_id}...")
             res = requests.get(url, params=params, stream=True, timeout=60)
             res.raise_for_status()
-            client = sseclient.SSEClient(res)
+            print("✅ [Facebook] Successfully connected to live_comments SSE stream!")
 
+            client = sseclient.SSEClient(res)
             for event in client.events():
                 if not event.data or event.data == "null":
                     continue
@@ -153,7 +156,6 @@ def listen_facebook():
 
         print("⏳ [Facebook] Reconnecting in 5 seconds...")
         time.sleep(5)
-
 
 # -----------------------------
 # --- Kick Functions ---
