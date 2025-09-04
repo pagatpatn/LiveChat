@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from queue import Queue
 from kickapi import KickAPI
 import sseclient
+import urllib.parse
 
 # -----------------------------
 # --- Config / Env Variables ---
@@ -111,7 +112,6 @@ def get_fb_live_video_id(page_id, page_token):
     return None
 
 def listen_facebook():
-    """Listen to live comments via SSE with auto-reconnect."""
     if not FB_PAGE_TOKEN or not FB_PAGE_ID:
         print("⚠️ FB_PAGE_TOKEN or FB_PAGE_ID not set, skipping Facebook listener")
         return
@@ -132,9 +132,13 @@ def listen_facebook():
             "fields": "from{name,id},message",
         }
 
+        # Properly encode query params
+        query_string = urllib.parse.urlencode(params)
+        full_url = f"{url}?{query_string}"
+
         try:
             print(f"📡 [Facebook] Connecting to SSE stream for video {video_id}...")
-            res = requests.get(url, params=params, stream=True, timeout=60)
+            res = requests.get(full_url, stream=True, timeout=60)
             res.raise_for_status()
             print("✅ [Facebook] Successfully connected to live_comments SSE stream!")
 
@@ -161,9 +165,7 @@ def listen_facebook():
 
         print("⏳ [Facebook] Reconnecting in 5 seconds...")
         time.sleep(5)
-
-
-
+        
 # -----------------------------
 # --- Kick Listener ---
 # -----------------------------
