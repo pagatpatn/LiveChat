@@ -7,8 +7,7 @@ import json
 from datetime import datetime, timedelta
 from queue import Queue
 from kickapi import KickAPI
-import sseclient
-import urllib.parse
+from flask import Flask
 
 # -----------------------------
 # --- Config / Env Variables ---
@@ -91,51 +90,41 @@ def ntfy_worker():
 # -----------------------------
 # --- Facebook Listener (SSE) ---
 # -----------------------------
-GRAPH_API = "https://graph.facebook.com/v20.0"
-GRAPH_STREAM = "https://streaming-graph.facebook.com/v20.0"
+app = Flask(__name__)
 
-def get_fb_live_video_id(page_id, page_token):
-    """Find the currently active LIVE video for the Page."""
-    url = f"{GRAPH_API}/{page_id}/videos"
-    params = {
-        "fields": "id,live_status",
-        "access_token": page_token,
-        "limit": 5,
-    }
-    try:
-        res = requests.get(url, params=params, timeout=10).json()
-        for v in res.get("data", []):
-            if v.get("live_status") == "LIVE":
-                return v["id"]
-    except Exception as e:
-        print("⚠️ Error fetching FB live video:", e)
-    return None
+# Use your environment variable
+FB_VERIFY_TOKEN = os.getenv("FB_VERIFY_TOKEN")
 
-def listen_facebook_polling():
-    last_seen = set()
-    while True:
-        video_id = get_fb_live_video_id(FB_PAGE_ID, FB_PAGE_TOKEN)
-        if not video_id:
-            time.sleep(10)
-            continue
-        url = f"https://graph.facebook.com/v20.0/{video_id}/comments"
-        params = {"access_token": FB_PAGE_TOKEN, "order": "chronological"}
-        try:
-            resp = requests.get(url, params=params, timeout=10).json()
-            for comment in resp.get("data", []):
-                cid = comment["id"]
-                if cid in last_seen:
-                    continue
-                last_seen.add(cid)
-                user = comment.get("from", {}).get("name", "Unknown")
-                msg = comment.get("message", "")
-                if msg:
+@app.route("/fb_webhook", methods=["GET", "POST"])
+def fb_webhook():
+    if request.method == "GET":
+        # Facebook verification
+        mode = request.args.get("hub.mode")
+        token = request.args.get("hub.verify_token")
+        challenge = request.args.get("hub.challenge")
+        if mode == "subscribe" and token == FB_VERIFY_TOKEN:
+            print("✅ Facebook webhook verified!")
+            return challenge, 200
+        print("❌ Facebook webhook verification failed")
+        return "Verification failed", 403
+
+    if request.method == "POST":
+        data = request.json
+        # Process incoming live comments
+        for entry in data.get("entry", []):
+            for change in entry.get("changes", []):
+                value = change.get("value", {})
+                user = value.get("from", {}).get("name", "Unknown")
+                msg = value.get("message", "")
+                if msg.strip():
                     print(f"[Facebook] {user}: {msg}")
                     ntfy_queue.put({"title": "Facebook", "user": user, "msg": msg})
-        except Exception as e:
-            print("❌ Error polling Facebook comments:", e)
-        time.sleep(5)
+        return "ok", 200
 
+def run_facebook_webhook():
+    """Run Flask webhook in a thread."""
+    app.run(host="0.0.0.0", port=5000)
+    
 # -----------------------------
 # --- Kick Listener ---
 # -----------------------------
@@ -268,13 +257,17 @@ def listen_youtube():
 # --- Main: Run All ---
 # -----------------------------
 if __name__ == "__main__":
+    # Start NTFY worker
     threading.Thread(target=ntfy_worker, daemon=True).start()
+
+    # Start Kick, YouTube listeners
     threads = [
-        threading.Thread(target=listen_facebook, daemon=True),
         threading.Thread(target=listen_kick, daemon=True),
-        threading.Thread(target=listen_youtube, daemon=True)
+        threading.Thread(target=listen_youtube, daemon=True),
+        threading.Thread(target=run_facebook_webhook, daemon=True)  # <-- webhook
     ]
     for t in threads:
         t.start()
     for t in threads:
         t.join()
+
