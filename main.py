@@ -341,19 +341,35 @@ def listen_youtube():
 
 
 # -----------------------------
-# --- Main: Run All ---
-# -----------------------------
-if __name__ == "__main__":
-    # Start NTFY worker
-    threading.Thread(target=ntfy_worker, daemon=True).start()
+# --- Main: Run All Listeners -
 
-    # Start listeners
-    threads = [
-        init_facebook_webhook(),  # Facebook webhook
-        threading.Thread(target=listen_kick, daemon=True),
-        threading.Thread(target=listen_youtube, daemon=True)
-    ]
-    for t in threads[1:]:  # Kick & YouTube threads
-        t.start()
-    for t in threads[1:]:
-        t.join()
+# Assuming the previous sections are imported:
+# init_facebook_webhook(), listen_kick(), listen_youtube(), ntfy_worker
+
+if __name__ == "__main__":
+    print("🚀 Starting all listeners...")
+
+    # Start NTFY worker (single thread for all platforms)
+    threading.Thread(target=ntfy_worker, daemon=True).start()
+    print("✅ NTFY worker started.")
+
+    # Initialize Facebook webhook
+    init_facebook_webhook()
+
+    # Start Kick & YouTube listeners in separate threads
+    kick_thread = threading.Thread(target=listen_kick, daemon=True)
+    youtube_thread = threading.Thread(target=listen_youtube, daemon=True)
+
+    kick_thread.start()
+    print("✅ Kick listener started.")
+
+    youtube_thread.start()
+    print("✅ YouTube listener started.")
+
+    # Keep main thread alive while daemon threads run
+    try:
+        while True:
+            threading.Event().wait(1)
+    except KeyboardInterrupt:
+        print("🛑 Shutting down listeners...")
+
