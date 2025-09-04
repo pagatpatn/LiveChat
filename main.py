@@ -224,81 +224,72 @@ def listen_youtube():
 app = Flask(__name__)
 
 # -----------------------------
-# --- Token Refresher ---
+# Token Refresher: Converts short-lived token to long-lived and refreshes
 # -----------------------------
 def fb_token_refresher():
-    """
-    Automatically refreshes the Facebook Page Access Token
-    every ~50 days to prevent expiration (long-lived tokens last 60 days).
-    """
     global FB_PAGE_TOKEN
-    refresh_interval = 50 * 24 * 60 * 60  # 50 days in seconds
     while True:
         try:
-            print("🔄 Refreshing Facebook Page Access Token...")
-            url = (
-                f"https://graph.facebook.com/v20.0/oauth/access_token"
-                f"?grant_type=fb_exchange_token"
-                f"&client_id={FB_APP_ID}"
-                f"&client_secret={FB_APP_SECRET}"
-                f"&fb_exchange_token={FB_PAGE_TOKEN}"
-            )
-            resp = requests.get(url, timeout=10).json()
-            new_token = resp.get("access_token")
-            if new_token:
-                FB_PAGE_TOKEN = new_token
-                print("✅ Facebook Page token refreshed successfully.")
+            # Convert to long-lived token (valid for ~60 days)
+            url = f"https://graph.facebook.com/v17.0/oauth/access_token"
+            params = {
+                "grant_type": "fb_exchange_token",
+                "client_id": os.getenv("FB_APP_ID"),
+                "client_secret": os.getenv("FB_APP_SECRET"),
+                "fb_exchange_token": FB_PAGE_TOKEN
+            }
+            resp = requests.get(url, params=params).json()
+            if "access_token" in resp:
+                FB_PAGE_TOKEN = resp["access_token"]
+                print("✅ FB Page token refreshed")
             else:
-                print("⚠️ Failed to refresh token:", resp)
+                print("⚠️ FB token refresh failed:", resp)
         except Exception as e:
-            print("❌ Error refreshing Facebook token:", e)
-        time.sleep(refresh_interval)
-
-# Start refresher thread
-threading.Thread(target=fb_token_refresher, daemon=True).start()
+            print("⚠️ FB token refresher error:", e)
+        time.sleep(60*60*24)  # Refresh once a day
 
 # -----------------------------
-# --- Webhook Endpoints ---
+# Facebook Webhook Listener
 # -----------------------------
 @app.route("/webhook", methods=["GET", "POST"])
 def facebook_webhook():
-    global FB_PAGE_TOKEN
-    # --- Verification for setup ---
     if request.method == "GET":
-        verify_token = request.args.get("hub.verify_token")
+        # Verification
+        mode = request.args.get("hub.mode")
+        token = request.args.get("hub.verify_token")
         challenge = request.args.get("hub.challenge")
-        if verify_token == FB_VERIFY_TOKEN:
-            print("✅ Facebook webhook verified successfully.")
-            return challenge, 200
-        return "❌ Invalid verification token", 403
+        if mode == "subscribe" and token == FB_VERIFY_TOKEN:
+            print("💡 Webhook verified")
+            return str(challenge), 200
+        else:
+            return "Verification token mismatch", 403
 
-    # --- Handle incoming webhook events ---
     if request.method == "POST":
         data = request.get_json()
-        if not data:
-            return "No data", 400
+        print("💡 Incoming webhook payload:", data)
 
-        # Only handle Page events
-        entry_list = data.get("entry", [])
-        for entry in entry_list:
-            changes = entry.get("changes", [])
-            for change in changes:
-                value = change.get("value", {})
-                if value.get("item") == "comment" and value.get("from"):
-                    user_name = value["from"].get("name", "Unknown")
-                    comment_message = value.get("message", "")
-                    if comment_message.strip():
-                        print(f"[Facebook] {user_name}: {comment_message}")
-                        # Put into NTFY queue
-                        ntfy_queue.put({
-                            "title": "Facebook",
-                            "user": user_name,
-                            "msg": comment_message
-                        })
-
+        # Parse feed events (comments)
+        if "entry" in data:
+            for entry in data["entry"]:
+                if "changes" in entry:
+                    for change in entry["changes"]:
+                        field = change.get("field")
+                        value = change.get("value")
+                        if field == "feed":
+                            comment_id = value.get("comment_id")
+                            from_user = value.get("from", {}).get("name", "Unknown")
+                            message = value.get("message", "")
+                            if comment_id and message:
+                                print(f"[Facebook] {from_user}: {message}")
+                                ntfy_queue.put({"title": "Facebook", "user": from_user, "msg": message})
         return "EVENT_RECEIVED", 200
 
-    return "Unsupported method", 405
+# -----------------------------
+# Start Webhook Flask App
+# -----------------------------
+def run_facebook_webhook():
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
 # -----------------------------
 # --- Main ---
 # -----------------------------
