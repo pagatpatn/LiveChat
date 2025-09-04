@@ -119,40 +119,35 @@ def listen_facebook():
     while True:
         video_id = get_fb_live_video_id(FB_PAGE_ID, FB_PAGE_TOKEN)
         if not video_id:
-            print("⏳ [Facebook] No active live video found, retrying in 10s...")
+            print("⏳ [Facebook] No active live video, retrying in 10s...")
             time.sleep(10)
             continue
 
         print(f"🎥 [Facebook] Live video detected! Video ID: {video_id}")
 
-        url = f"{GRAPH_STREAM}/{video_id}/live_comments"
+        # SSE endpoint
+        base_url = f"{GRAPH_STREAM}/{video_id}/live_comments"
         params = {
             "access_token": FB_PAGE_TOKEN,
-            "comment_rate": "one_per_five_seconds",
-            "fields": "from{name,id},message",
+            "comment_rate": "one_per_five_seconds"
         }
-
-        # Properly encode query params
-        query_string = urllib.parse.urlencode(params)
-        full_url = f"{url}?{query_string}"
+        # Keep 'fields' literal, don't encode curly braces
+        fields = "from{name,id},message"
+        full_url = f"{base_url}?{urllib.parse.urlencode(params)}&fields={fields}"
 
         try:
             print(f"📡 [Facebook] Connecting to SSE stream for video {video_id}...")
             res = requests.get(full_url, stream=True, timeout=60)
             res.raise_for_status()
-            print("✅ [Facebook] Successfully connected to live_comments SSE stream!")
-
             client = sseclient.SSEClient(res)
+            print("✅ [Facebook] Connected to live_comments SSE stream!")
+
             for event in client.events():
                 if not event.data or event.data == "null":
                     continue
                 try:
                     data = json.loads(event.data)
-                    user = (
-                        data.get("from", {}).get("name")
-                        or data.get("from", {}).get("id")
-                        or "Unknown"
-                    )
+                    user = data.get("from", {}).get("name") or data.get("from", {}).get("id") or "Unknown"
                     msg = data.get("message", "")
                     if msg.strip():
                         print(f"[Facebook] {user}: {msg}")
@@ -165,7 +160,7 @@ def listen_facebook():
 
         print("⏳ [Facebook] Reconnecting in 5 seconds...")
         time.sleep(5)
-        
+
 # -----------------------------
 # --- Kick Listener ---
 # -----------------------------
