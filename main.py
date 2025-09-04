@@ -7,7 +7,7 @@ import json
 from datetime import datetime, timedelta
 from queue import Queue
 from kickapi import KickAPI
-from flask import Flask, jsonify
+from flask import Flask, abort
 
 # -----------------------------
 # --- Config / Env Variables ---
@@ -223,52 +223,37 @@ def listen_youtube():
 # -----------------------------
 app = Flask(__name__)
 
-@app.route("/fb_webhook", methods=["GET"])
-def fb_verify():
-    """Webhook verification"""
-    verify_token = request.args.get("hub.verify_token")
-    challenge = request.args.get("hub.challenge")
-    if verify_token == FB_VERIFY_TOKEN:
-        return challenge
-    return "Invalid verify token", 403
+@app.route("/fb_webhook", methods=["GET", "POST"])
+def facebook_webhook():
+    # --- Verification handshake ---
+    if request.method == "GET":
+        mode = request.args.get("hub.mode")
+        token = request.args.get("hub.verify_token")
+        challenge = request.args.get("hub.challenge")
+        if mode == "subscribe" and token == FB_VERIFY_TOKEN:
+            print("✅ Facebook webhook verified successfully!")
+            return challenge, 200
+        else:
+            print("⚠️ Facebook webhook verification failed!")
+            return "Verification failed", 403
 
-@app.route("/fb_webhook", methods=["POST"])
-def fb_webhook():
-    data = request.get_json()
-    try:
+    # --- Handle incoming comments ---
+    elif request.method == "POST":
+        data = request.get_json()
+        if not data:
+            return "No data", 400
+
+        # Loop through entries and changes
         for entry in data.get("entry", []):
-            for comment in entry.get("changes", []):
-                user = comment.get("value", {}).get("from", {}).get("name", "Unknown")
-                msg = comment.get("value", {}).get("message", "")
-                if msg:
-                    ntfy_queue.put({"title": "Facebook", "user": user, "msg": msg})
-    except Exception as e:
-        print("⚠️ FB webhook parsing error:", e)
-    return "OK", 200
-
-def refresh_fb_token():
-    """Automatically refresh long-lived Page token every day"""
-    global FB_PAGE_TOKEN
-    try:
-        url = (
-            f"https://graph.facebook.com/v20.0/oauth/access_token"
-            f"?grant_type=fb_exchange_token"
-            f"&client_id={FB_APP_ID}"
-            f"&client_secret={FB_APP_SECRET}"
-            f"&fb_exchange_token={FB_PAGE_TOKEN}"
-        )
-        res = requests.get(url).json()
-        new_token = res.get("access_token")
-        if new_token:
-            print("✅ FB token refreshed")
-            FB_PAGE_TOKEN = new_token
-    except Exception as e:
-        print("⚠️ Failed to refresh FB token:", e)
-
-def fb_token_refresher():
-    while True:
-        refresh_fb_token()
-        time.sleep(24 * 3600)  # refresh once a day
+            for change in entry.get("changes", []):
+                if change.get("field") == "feed":
+                    comment_data = change.get("value", {})
+                    comment = comment_data.get("message")
+                    user = comment_data.get("from", {}).get("name", "Unknown")
+                    if comment:
+                        print(f"[Facebook] {user}: {comment}")
+                        ntfy_queue.put({"title": "Facebook", "user": user, "msg": comment})
+        return "ok", 200
 
 # -----------------------------
 # --- Main ---
