@@ -127,20 +127,16 @@ def listen_facebook():
 
         # SSE endpoint
         base_url = f"{GRAPH_STREAM}/{video_id}/live_comments"
-        params = {
-            "access_token": FB_PAGE_TOKEN,
-            "comment_rate": "one_per_five_seconds"
-        }
-        # Keep 'fields' literal, don't encode curly braces
-        fields = "from{name,id},message"
-        full_url = f"{base_url}?{urllib.parse.urlencode(params)}&fields={fields}"
+        # Only encode access_token and comment_rate, keep fields literal
+        params = f"access_token={FB_PAGE_TOKEN}&comment_rate=one_per_five_seconds&fields=from{{name,id}},message"
+        full_url = f"{base_url}?{params}"
 
         try:
             print(f"📡 [Facebook] Connecting to SSE stream for video {video_id}...")
             res = requests.get(full_url, stream=True, timeout=60)
             res.raise_for_status()
             client = sseclient.SSEClient(res)
-            print("✅ [Facebook] Connected to live_comments SSE stream!")
+            print("✅ [Facebook] Successfully connected to live_comments SSE stream!")
 
             for event in client.events():
                 if not event.data or event.data == "null":
@@ -160,6 +156,7 @@ def listen_facebook():
 
         print("⏳ [Facebook] Reconnecting in 5 seconds...")
         time.sleep(5)
+
 
 # -----------------------------
 # --- Kick Listener ---
