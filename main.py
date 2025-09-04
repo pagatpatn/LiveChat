@@ -1,14 +1,14 @@
 # -----------------------------
-# --- Full Railway/Gunicorn Ready Setup ---
+# --- Imports ---
 # -----------------------------
 from flask import Flask, request
 import os
 import threading
 import time
 import requests
-from queue import Queue
-from datetime import datetime, timedelta
 import re
+from datetime import datetime, timedelta
+from queue import Queue
 from kickapi import KickAPI
 
 # -----------------------------
@@ -21,7 +21,6 @@ FB_PAGE_ID = os.getenv("FB_PAGE_ID")
 FB_VERIFY_TOKEN = os.getenv("FB_VERIFY_TOKEN", "my_verify_token")
 
 KICK_CHANNEL = os.getenv("KICK_CHANNEL", "")
-KICK_POLL_INTERVAL = 5
 KICK_TIME_WINDOW_MINUTES = 0.1
 
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
@@ -276,13 +275,15 @@ def listen_youtube():
                 break
 
 # -----------------------------
-# --- Start Background Listeners (Gunicorn-Friendly) ---
+# --- Start All Background Listeners ---
 # -----------------------------
-@fb_app.before_first_request
-def start_background_listeners():
-    print("🚀 Starting background listeners...")
+def start_all_listeners():
+    print("🚀 Starting all background listeners...")
     threading.Thread(target=ntfy_worker, daemon=True).start()
     threading.Thread(target=listen_kick, daemon=True).start()
     threading.Thread(target=listen_youtube, daemon=True).start()
     subscribe_facebook_page()
     print("✅ All background listeners started.")
+
+# Start immediately when module is imported (Gunicorn friendly)
+threading.Thread(target=start_all_listeners, daemon=True).start()
