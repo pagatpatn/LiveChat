@@ -90,9 +90,10 @@ def ntfy_worker():
 ntfy_queue = Queue()
 
 # Flask app for webhook
+# Flask app for webhook
 fb_app = Flask(__name__)
 
-@fb_app.route("/facebook_webhook", methods=["GET", "POST"])
+@fb_app.route("/webhook", methods=["GET", "POST"])
 def facebook_webhook():
     # --- Verification handshake ---
     if request.method == "GET":
@@ -112,19 +113,20 @@ def facebook_webhook():
             for change in changes:
                 field = change.get("field")
                 value = change.get("value", {})
-                
-                # Handle new comments
-                if field == "comments":
-                    user = value.get("from", {}).get("name", "Unknown")
-                    msg = value.get("message", "")
-                    print(f"[Facebook] {user}: {msg}")
-                    ntfy_queue.put({"title": "Facebook", "user": user, "msg": msg})
-                
-                # Handle new live videos (optional)
-                elif field == "live_videos":
+
+                # Handle live videos & their comments
+                if field == "live_videos":
                     video_id = value.get("id")
                     desc = value.get("description", "(no description)")
                     print(f"🎬 [Facebook] Live video started: {video_id} | {desc}")
+
+                    # Extract comments if present
+                    comments = value.get("comments", {}).get("data", [])
+                    for comment in comments:
+                        user = comment.get("from", {}).get("name", "Unknown")
+                        msg = comment.get("message", "")
+                        print(f"[Facebook] {user}: {msg}")
+                        ntfy_queue.put({"title": "Facebook", "user": user, "msg": msg})
 
         return "OK", 200
 
@@ -139,7 +141,7 @@ def subscribe_facebook_page():
     url = f"https://graph.facebook.com/v20.0/{FB_PAGE_ID}/subscribed_apps"
     params = {
         "access_token": FB_PAGE_TOKEN,
-        "subscribed_fields": "comments,live_videos",
+        "subscribed_fields": "live_videos"  # ✅ only live_videos
     }
     try:
         res = requests.post(url, params=params)
@@ -153,7 +155,8 @@ def subscribe_facebook_page():
 def run_facebook_webhook_server():
     fb_app.run(host="0.0.0.0", port=5000)
 
-# --- Initialize ---
+
+# --- Initialize Facebook Webhook ---
 def init_facebook_webhook():
     # Subscribe page (one-time)
     subscribe_facebook_page()
