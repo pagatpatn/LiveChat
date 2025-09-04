@@ -81,39 +81,59 @@ def ntfy_worker():
 
 
 # -----------------------------
-# --- Facebook (SSE Version Only) ---
+# --- Facebook (SSE Version with Live Video Detection) ---
 # -----------------------------
 import sseclient
 
-GRAPH = "https://streaming-graph.facebook.com/v20.0"
+GRAPH_API = "https://graph.facebook.com/v20.0"
+GRAPH_STREAM = "https://streaming-graph.facebook.com/v20.0"
+
+def get_fb_live_video_id(page_id, page_token):
+    """Find the currently active LIVE video for the Page."""
+    url = f"{GRAPH_API}/{page_id}/videos"
+    params = {
+        "fields": "id,live_status",
+        "access_token": page_token,
+        "limit": 5,
+    }
+    try:
+        res = requests.get(url, params=params, timeout=10).json()
+        for v in res.get("data", []):
+            if v.get("live_status") == "LIVE":
+                return v["id"]
+    except Exception as e:
+        print("⚠️ Error fetching FB live video:", e)
+    return None
 
 def listen_facebook():
-    """
-    Connect to Facebook Live Comments using SSE (streaming Graph API).
-    Works with permanent Page Token. Auto-reconnects if the stream drops.
-    """
+    """Listen to live comments via SSE with auto-reconnect."""
     if not FB_PAGE_TOKEN or not FB_PAGE_ID:
         print("⚠️ FB_PAGE_TOKEN or FB_PAGE_ID not set, skipping Facebook listener")
         return
 
-    url = f"{GRAPH}/{FB_PAGE_ID}/live_comments"
-    params = {
-        "access_token": FB_PAGE_TOKEN,
-        "comment_rate": "one_per_two_seconds",  # rate limit to reduce spam
-        "fields": "from{name,id},message"
-    }
-
     while True:
+        video_id = get_fb_live_video_id(FB_PAGE_ID, FB_PAGE_TOKEN)
+        if not video_id:
+            print("⏳ [Facebook] No active live video found, retrying in 10s...")
+            time.sleep(10)
+            continue
+
+        url = f"{GRAPH_STREAM}/{video_id}/live_comments"
+        params = {
+            "access_token": FB_PAGE_TOKEN,
+            "comment_rate": "one_per_two_seconds",
+            "fields": "from{name,id},message",
+        }
+
         try:
-            print("📡 [Facebook] Connecting to SSE live_comments stream...")
+            print(f"📡 [Facebook] Connecting to SSE stream for video {video_id}...")
             res = requests.get(url, params=params, stream=True, timeout=60)
-            res.raise_for_status()  # raise error for bad tokens etc.
+            res.raise_for_status()
             client = sseclient.SSEClient(res)
 
             for event in client.events():
                 if not event.data or event.data == "null":
                     continue
-
                 try:
                     data = json.loads(event.data)
                     user = (
@@ -122,11 +142,9 @@ def listen_facebook():
                         or "Unknown"
                     )
                     msg = data.get("message", "")
-
                     if msg.strip():
                         print(f"[Facebook] {user}: {msg}")
                         ntfy_queue.put({"title": "Facebook", "user": user, "msg": msg})
-
                 except Exception as inner_e:
                     print("⚠️ Error parsing FB SSE event:", inner_e)
 
@@ -134,7 +152,7 @@ def listen_facebook():
             print("❌ [Facebook] SSE connection error:", e)
 
         print("⏳ [Facebook] Reconnecting in 5 seconds...")
-        time.sleep(5)  # backoff before retry
+        time.sleep(5)
 
 
 # -----------------------------
