@@ -81,47 +81,60 @@ def ntfy_worker():
 
 
 # -----------------------------
-# --- Facebook Webhook (Flask)
+# --- Facebook (SSE Version Only) ---
 # -----------------------------
-from flask import Flask, request
+import sseclient
 
-app = Flask(__name__)
+GRAPH = "https://streaming-graph.facebook.com/v20.0"
 
-FB_VERIFY_TOKEN = os.getenv("FB_VERIFY_TOKEN", "my_secret")
+def listen_facebook():
+    """
+    Connect to Facebook Live Comments using SSE (streaming Graph API).
+    Works with permanent Page Token. Auto-reconnects if the stream drops.
+    """
+    if not FB_PAGE_TOKEN or not FB_PAGE_ID:
+        print("⚠️ FB_PAGE_TOKEN or FB_PAGE_ID not set, skipping Facebook listener")
+        return
 
-@app.route("/webhook", methods=["GET", "POST"])
-def fb_webhook():
-    if request.method == "GET":
-        # ✅ Verification handshake
-        mode = request.args.get("hub.mode")
-        token = request.args.get("hub.verify_token")
-        challenge = request.args.get("hub.challenge")
+    url = f"{GRAPH}/{FB_PAGE_ID}/live_comments"
+    params = {
+        "access_token": FB_PAGE_TOKEN,
+        "comment_rate": "one_per_two_seconds",  # rate limit to reduce spam
+        "fields": "from{name,id},message"
+    }
 
-        if mode == "subscribe" and token == FB_VERIFY_TOKEN:
-            print("✅ [Facebook] Webhook verified successfully")
-            return challenge, 200
-        else:
-            print("❌ [Facebook] Webhook verification failed")
-            return "Verification failed", 403
+    while True:
+        try:
+            print("📡 [Facebook] Connecting to SSE live_comments stream...")
+            res = requests.get(url, params=params, stream=True, timeout=60)
+            res.raise_for_status()  # raise error for bad tokens etc.
+            client = sseclient.SSEClient(res)
 
-    if request.method == "POST":
-        # ✅ New comment arrives
-        data = request.get_json()
-        print("📥 [Facebook] Webhook payload:", json.dumps(data, indent=2))
+            for event in client.events():
+                if not event.data or event.data == "null":
+                    continue
 
-        for entry in data.get("entry", []):
-            for change in entry.get("changes", []):
-                if change.get("field") == "live_comments":
-                    value = change.get("value", {})
-                    user = value.get("from", {}).get("name", "Unknown")
-                    msg = value.get("message", "")
-                    ts = value.get("created_time")
+                try:
+                    data = json.loads(event.data)
+                    user = (
+                        data.get("from", {}).get("name")
+                        or data.get("from", {}).get("id")
+                        or "Unknown"
+                    )
+                    msg = data.get("message", "")
 
-                    if msg:
-                        ntfy_queue.put({"title": "Facebook", "user": user, "msg": msg, "time": ts})
+                    if msg.strip():
                         print(f"[Facebook] {user}: {msg}")
+                        ntfy_queue.put({"title": "Facebook", "user": user, "msg": msg})
 
-        return "EVENT_RECEIVED", 200
+                except Exception as inner_e:
+                    print("⚠️ Error parsing FB SSE event:", inner_e)
+
+        except Exception as e:
+            print("❌ [Facebook] SSE connection error:", e)
+
+        print("⏳ [Facebook] Reconnecting in 5 seconds...")
+        time.sleep(5)  # backoff before retry
 
 
 # -----------------------------
@@ -295,7 +308,6 @@ def listen_youtube():
                 yt_sent_messages = set()  # 🔄 also reset on crash
                 break
 
-
 # -----------------------------
 # --- Main: Run All ---
 # -----------------------------
@@ -303,14 +315,13 @@ if __name__ == "__main__":
     # Start NTFY worker
     threading.Thread(target=ntfy_worker, daemon=True).start()
 
-    # Start listeners
+    # Start listeners (Facebook via SSE, Kick, YouTube)
     threads = [
-    threading.Thread(target=listen_kick, daemon=True),
-    threading.Thread(target=listen_youtube, daemon=True)
-]
-for t in threads:
-    t.start()
-
-# ✅ Run Flask for Facebook webhook
-port = int(os.getenv("PORT", 5000))
-app.run(host="0.0.0.0", port=port)
+        threading.Thread(target=listen_facebook, daemon=True),
+        threading.Thread(target=listen_kick, daemon=True),
+        threading.Thread(target=listen_youtube, daemon=True)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
