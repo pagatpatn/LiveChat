@@ -82,17 +82,20 @@ def ntfy_worker():
         ntfy_queue.task_done()
 
 
-
+# -----------------------------
+# --- Facebook Webhook Section (Railway Ready) ---
+# -----------------------------
 # -----------------------------
 # --- Config / Environment ---
 # -----------------------------
 ntfy_queue = Queue()  # reuse your central NTFY queue
 
-# -----------------------------
-# --- Flask App for Webhook ---
-# -----------------------------
+# Flask app for webhook
 fb_app = Flask(__name__)
 
+# -----------------------------
+# --- Webhook Route ---
+# -----------------------------
 @fb_app.route("/webhook", methods=["GET", "POST"])
 def facebook_webhook():
     # --- Verification handshake (GET) ---
@@ -100,9 +103,11 @@ def facebook_webhook():
         mode = request.args.get("hub.mode")
         token = request.args.get("hub.verify_token")
         challenge = request.args.get("hub.challenge")
+        print(f"Webhook verification attempt: mode={mode}, token={token}, challenge={challenge}")
         if mode == "subscribe" and token == FB_VERIFY_TOKEN:
             print("✅ Facebook webhook verified successfully!")
             return challenge, 200
+        print("❌ Verification failed!")
         return "Verification failed", 403
 
     # --- Incoming events (POST) ---
@@ -129,7 +134,6 @@ def facebook_webhook():
                         ntfy_queue.put({"title": "Facebook", "user": user, "msg": msg})
         return "OK", 200
 
-
 # -----------------------------
 # --- Subscribe Page to Webhooks ---
 # -----------------------------
@@ -151,23 +155,17 @@ def subscribe_facebook_page():
     except Exception as e:
         print("❌ Failed to subscribe Facebook webhook:", e)
 
-
 # -----------------------------
-# --- Run Flask server in a thread ---
-# -----------------------------
-def run_facebook_webhook_server():
-    fb_app.run(host="0.0.0.0", port=5000)
-
-
-# -----------------------------
-# --- Initialize Facebook Webhook ---
+# --- Initialization ---
 # -----------------------------
 def init_facebook_webhook():
     # Subscribe page (one-time)
     subscribe_facebook_page()
-    # Start Flask webhook server in a daemon thread
-    threading.Thread(target=run_facebook_webhook_server, daemon=True).start()
+    print("📡 Facebook webhook initialized. Ready to receive events.")
 
+# -----------------------------
+# --- Notes for Railway Deployment ---
+# -----------------------------
 
 
 # -----------------------------
