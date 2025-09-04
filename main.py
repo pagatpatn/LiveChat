@@ -83,12 +83,15 @@ def ntfy_worker():
 
 
 # -----------------------------
-# --- Facebook Webhook Section (Railway Ready) ---
+# --- Facebook Webhook Section (Railway Ready with Logging) ---
 # -----------------------------
+
+
 # -----------------------------
 # --- Config / Environment ---
 # -----------------------------
 ntfy_queue = Queue()  # reuse your central NTFY queue
+
 
 # Flask app for webhook
 fb_app = Flask(__name__)
@@ -103,7 +106,7 @@ def facebook_webhook():
         mode = request.args.get("hub.mode")
         token = request.args.get("hub.verify_token")
         challenge = request.args.get("hub.challenge")
-        print(f"Webhook verification attempt: mode={mode}, token={token}, challenge={challenge}")
+        print(f"📩 Verification attempt: mode={mode}, token={token}, challenge={challenge}")
         if mode == "subscribe" and token == FB_VERIFY_TOKEN:
             print("✅ Facebook webhook verified successfully!")
             return challenge, 200
@@ -113,6 +116,8 @@ def facebook_webhook():
     # --- Incoming events (POST) ---
     if request.method == "POST":
         data = request.json
+        print(f"📩 Incoming POST request from Facebook: {data}")  # Full request logging
+
         for entry in data.get("entry", []):
             changes = entry.get("changes", [])
             for change in changes:
@@ -132,7 +137,9 @@ def facebook_webhook():
                         msg = comment.get("message", "")
                         print(f"[Facebook] {user}: {msg}")
                         ntfy_queue.put({"title": "Facebook", "user": user, "msg": msg})
+
         return "OK", 200
+
 
 # -----------------------------
 # --- Subscribe Page to Webhooks ---
@@ -155,6 +162,7 @@ def subscribe_facebook_page():
     except Exception as e:
         print("❌ Failed to subscribe Facebook webhook:", e)
 
+
 # -----------------------------
 # --- Initialization ---
 # -----------------------------
@@ -162,10 +170,6 @@ def init_facebook_webhook():
     # Subscribe page (one-time)
     subscribe_facebook_page()
     print("📡 Facebook webhook initialized. Ready to receive events.")
-
-# -----------------------------
-# --- Notes for Railway Deployment ---
-# -----------------------------
 
 
 # -----------------------------
