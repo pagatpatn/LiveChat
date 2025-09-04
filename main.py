@@ -127,11 +127,12 @@ def listen_facebook():
 
         # Build URL manually, keep {} literal
         url = (
-            f"https://streaming-graph.facebook.com/v20.0/{video_id}/live_comments"
-            f"?access_token={FB_PAGE_TOKEN}"
-            f"&comment_rate=one_per_five_seconds"
-            f"&fields=from{{name,id}},message"
-        )
+    f"https://streaming-graph.facebook.com/v20.0/{video_id}/live_comments"
+    f"?access_token={FB_PAGE_TOKEN}"
+    f"&comment_rate=one_per_five_seconds"
+    f"&fields=from{{name,id}},message"  # note the double {{ and }}
+)
+
 
         try:
             print(f"📡 [Facebook] Connecting to SSE stream for video {video_id}...")
