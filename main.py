@@ -7,7 +7,7 @@ import json
 from datetime import datetime, timedelta
 from queue import Queue
 from kickapi import KickAPI
-from flask import Flask
+from flask import Flask, jsonify
 
 # -----------------------------
 # --- Config / Env Variables ---
@@ -88,42 +88,48 @@ def ntfy_worker():
         ntfy_queue.task_done()
 
 # -----------------------------
-# --- Facebook Listener (SSE) ---
+# --- Facebook Webhook (Railway-ready) ---
 # -----------------------------
 app = Flask(__name__)
 
-# Use your environment variable
-FB_VERIFY_TOKEN = os.getenv("FB_VERIFY_TOKEN")
+FB_VERIFY_TOKEN = os.getenv("FB_VERIFY_TOKEN")  # your verify token
 
-@app.route("/fb_webhook", methods=["GET", "POST"])
+@app.route("/webhook", methods=["GET", "POST"])
 def fb_webhook():
     if request.method == "GET":
-        # Facebook verification
+        # Verification challenge from Facebook
         mode = request.args.get("hub.mode")
         token = request.args.get("hub.verify_token")
         challenge = request.args.get("hub.challenge")
         if mode == "subscribe" and token == FB_VERIFY_TOKEN:
-            print("✅ Facebook webhook verified!")
+            print("✅ Facebook webhook verified")
             return challenge, 200
-        print("❌ Facebook webhook verification failed")
-        return "Verification failed", 403
+        else:
+            print("❌ Facebook webhook verification failed")
+            return "Forbidden", 403
 
     if request.method == "POST":
-        data = request.json
-        # Process incoming live comments
+        data = request.get_json()
+        if not data:
+            return "No data", 400
+
+        # Facebook may send multiple entries in "entry" array
         for entry in data.get("entry", []):
             for change in entry.get("changes", []):
                 value = change.get("value", {})
-                user = value.get("from", {}).get("name", "Unknown")
-                msg = value.get("message", "")
-                if msg.strip():
-                    print(f"[Facebook] {user}: {msg}")
-                    ntfy_queue.put({"title": "Facebook", "user": user, "msg": msg})
-        return "ok", 200
+                comment_id = value.get("comment_id")
+                message = value.get("message")
+                sender_name = value.get("from", {}).get("name", "Unknown")
+                if message and comment_id and comment_id not in fb_seen_comment_ids:
+                    fb_seen_comment_ids.add(comment_id)
+                    print(f"[Facebook Webhook] {sender_name}: {message}")
+                    ntfy_queue.put({
+                        "title": "Facebook",
+                        "user": sender_name,
+                        "msg": message
+                    })
 
-def run_facebook_webhook():
-    """Run Flask webhook in a thread."""
-    app.run(host="0.0.0.0", port=5000)
+        return "OK", 200
     
 # -----------------------------
 # --- Kick Listener ---
@@ -253,21 +259,12 @@ def listen_youtube():
                 yt_sent_messages = set()
                 break
 
-# -----------------------------
-# --- Main: Run All ---
-# -----------------------------
 if __name__ == "__main__":
     # Start NTFY worker
     threading.Thread(target=ntfy_worker, daemon=True).start()
 
-    # Start Kick, YouTube listeners
-    threads = [
-        threading.Thread(target=listen_kick, daemon=True),
-        threading.Thread(target=listen_youtube, daemon=True),
-        threading.Thread(target=run_facebook_webhook, daemon=True)  # <-- webhook
-    ]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
+    # Start Flask server for Facebook Webhook
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
+
 
