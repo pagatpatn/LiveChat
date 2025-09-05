@@ -1,4 +1,4 @@
-Flask>=2.3
-requests
-kickapi==0.3.5
-gunicorn
+Flask==3.0.3
+requests==2.32.3
+gunicorn==23.0.0
+kickapi==0.5.1
