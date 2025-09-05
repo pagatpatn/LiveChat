@@ -31,9 +31,9 @@ YOUTUBE_NTFY_DELAY = float(os.getenv("YOUTUBE_NTFY_DELAY", 2))
 # NTFY
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "streamchats123")
 
+# Per-user last message tracking
 kick_last_message_by_user = {}
 yt_last_message_by_user = {}
-
 
 # =====================================================
 # --- Global Tracking ---
@@ -242,7 +242,7 @@ def listen_kick():
                     text = extract_emoji(getattr(msg, "text", ""))
                     msg_id = getattr(msg, "id", f"{msg.sender.username}:{text}")
                     user = msg.sender.username
-                    # Skip duplicates
+                    # Skip duplicates per ID or same message from same user
                     if msg_id in kick_seen_ids or kick_last_message_by_user.get(user) == text:
                         continue
                     kick_seen_ids.add(msg_id)
@@ -256,7 +256,6 @@ def listen_kick():
         except Exception as e:
             print("⚠️ [Kick] Listener error, retrying:", e)
             time.sleep(KICK_POLL_INTERVAL)
-
 
 # =====================================================
 # --- YouTube Section ---
@@ -294,7 +293,7 @@ def listen_youtube():
                     msg_id = item["id"]
                     user = item["authorDetails"]["displayName"]
                     msg = item["snippet"]["displayMessage"]
-                    # Skip duplicates
+                    # Skip duplicates per ID or same message from same user
                     if msg_id in yt_sent_messages or yt_last_message_by_user.get(user) == msg:
                         continue
                     yt_sent_messages.add(msg_id)
@@ -309,7 +308,6 @@ def listen_youtube():
             yt_sent_messages = set()
             yt_last_message_by_user = {}
             time.sleep(30)
-
 
 # =====================================================
 # --- Start Listeners ---
