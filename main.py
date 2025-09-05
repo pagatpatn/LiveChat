@@ -53,6 +53,34 @@ last_checked_video_id = None
 # -----------------------------
 # --- NTFY Worker ---
 # -----------------------------
+
+MAX_SHORT_MSG_LEN = 95
+
+def clean_single_line(msg: str) -> str:
+    """Force message into a single line and prevent ntfy from wrapping long words"""
+    flat = " ".join(msg.replace("\n", " ").replace("\r", " ").split())
+    fixed_words = []
+    for word in flat.split():
+        if len(word) > 30:
+            chunks = [word[i:i+30] for i in range(0, len(word), 30)]
+            fixed_words.append("\u200B".join(chunks))
+        else:
+            fixed_words.append(word)
+    return " ".join(fixed_words)
+
+def split_message(text, max_len=2000):
+    """Split long text into chunks with word boundaries"""
+    parts = []
+    while len(text) > max_len:
+        split_at = text.rfind(" ", 0, max_len)
+        if split_at == -1:
+            split_at = max_len
+        parts.append(text[:split_at].strip())
+        text = text[split_at:].strip()
+    if text:
+        parts.append(text)
+    return parts
+
 def ntfy_worker():
     global last_ntfy_sent
     while True:
@@ -63,17 +91,38 @@ def ntfy_worker():
             now = time.time()
             if now - last_ntfy_sent < 5:
                 time.sleep(5 - (now - last_ntfy_sent))
+
             title = msg_obj.get("title", "Chat")
             user = msg_obj.get("user", "Unknown")
             msg = msg_obj.get("msg", "")
-            body = f"{user}: {msg}"
-            requests.post(
-                f"https://ntfy.sh/{NTFY_TOPIC}",
-                data=body.encode("utf-8"),
-                headers={"Title": title},
-                timeout=5,
-            )
+
+            clean_msg = clean_single_line(msg)
+            body = f"{user}: {clean_msg}"
+
+            if len(body) <= MAX_SHORT_MSG_LEN:
+                # short message
+                requests.post(
+                    f"https://ntfy.sh/{NTFY_TOPIC}",
+                    data=body.encode("utf-8"),
+                    headers={"Title": title},
+                    timeout=5,
+                )
+            else:
+                # long message → split into parts
+                parts = split_message(body, 2000)
+                for i, part in enumerate(parts, 1):
+                    part_title = f"{title} [{i}/{len(parts)}]"
+                    requests.post(
+                        f"https://ntfy.sh/{NTFY_TOPIC}",
+                        data=part.encode("utf-8"),
+                        headers={"Title": part_title},
+                        timeout=5,
+                    )
+                    if i < len(parts):
+                        time.sleep(3)  # 3s between parts
+
             last_ntfy_sent = time.time()
+
         except Exception as e:
             print("⚠️ Failed to send NTFY:", e)
         ntfy_queue.task_done()
