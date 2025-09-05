@@ -26,8 +26,10 @@ YOUTUBE_NTFY_DELAY = float(os.getenv("YOUTUBE_NTFY_DELAY", 2))
 
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "streamchats123")
 
+# per-user last message tracking
 kick_last_message_by_user = {}
 yt_last_message_by_user = {}
+fb_last_message_by_user = {}
 
 # =====================================================
 # --- Global Tracking ---
@@ -36,12 +38,11 @@ ntfy_queue = Queue()
 last_ntfy_sent = 0
 
 fb_seen_comment_ids = set()
-fb_last_message_by_user = {}
-kick_api = KickAPI()
 kick_seen_ids = set()
 kick_queue = []
 yt_sent_messages = set()
 
+kick_api = KickAPI()
 GRAPH = "https://graph.facebook.com/v20.0"
 MAX_SHORT_MSG_LEN = 97
 
@@ -223,9 +224,9 @@ def listen_kick():
             if chat and getattr(chat, "messages", []):
                 for msg in chat.messages:
                     text = extract_emoji(getattr(msg, "text", ""))
-                    msg_id = getattr(msg, "id", f"{msg.sender.username}:{text}")
+                    msg_id = getattr(msg, "id", None)
                     user = msg.sender.username
-                    if msg_id in kick_seen_ids or kick_last_message_by_user.get(user) == text:
+                    if not msg_id or msg_id in kick_seen_ids:
                         continue
                     kick_seen_ids.add(msg_id)
                     kick_last_message_by_user[user] = text
@@ -240,7 +241,7 @@ def listen_kick():
             time.sleep(KICK_POLL_INTERVAL)
 
 # =====================================================
-# --- YouTube (Optimized) ---
+# --- YouTube ---
 # =====================================================
 def listen_youtube():
     print("📡 [YouTube] Connecting...")
@@ -252,7 +253,6 @@ def listen_youtube():
 
     while True:
         try:
-            # Step 1: Find live video
             search_url = f"https://www.googleapis.com/youtube/v3/search?part=snippet&channelId={YOUTUBE_CHANNEL_ID}&eventType=live&type=video&maxResults=1&key={YOUTUBE_API_KEY}"
             resp = requests.get(search_url).json()
             if not resp.get("items"):
@@ -261,8 +261,6 @@ def listen_youtube():
                 continue
 
             video_id = resp["items"][0]["id"]["videoId"]
-
-            # Step 2: Get live chat ID
             details_url = f"https://www.googleapis.com/youtube/v3/videos?part=liveStreamingDetails&id={video_id}&key={YOUTUBE_API_KEY}"
             details = requests.get(details_url).json()
             live_chat_id = details["items"][0]["liveStreamingDetails"].get("activeLiveChatId")
@@ -274,7 +272,6 @@ def listen_youtube():
             print("✅ [YouTube] Connected to live chat!")
             page_token = None
 
-            # Step 3: Poll messages using YouTube recommended interval
             while True:
                 chat_url = f"https://www.googleapis.com/youtube/v3/liveChat/messages?liveChatId={live_chat_id}&part=snippet,authorDetails&key={YOUTUBE_API_KEY}"
                 if page_token:
@@ -285,7 +282,7 @@ def listen_youtube():
                     msg_id = item["id"]
                     user = item["authorDetails"]["displayName"]
                     msg = item["snippet"]["displayMessage"]
-                    if msg_id in yt_sent_messages or yt_last_message_by_user.get(user) == msg:
+                    if msg_id in yt_sent_messages:
                         continue
                     yt_sent_messages.add(msg_id)
                     yt_last_message_by_user[user] = msg
@@ -294,14 +291,11 @@ def listen_youtube():
                     time.sleep(YOUTUBE_NTFY_DELAY)
 
                 page_token = data.get("nextPageToken")
-                # Adaptive polling interval
                 interval = data.get("pollingIntervalMillis", 5000) / 1000
                 time.sleep(interval)
 
         except Exception as e:
             print("⚠️ [YouTube] Error, retrying in 30s...", e)
-            yt_sent_messages = set()
-            yt_last_message_by_user = {}
             time.sleep(30)
 
 # =====================================================
@@ -319,6 +313,5 @@ def start_all_listeners():
 # =====================================================
 if __name__ == "__main__":
     start_all_listeners()
-    # Keep the main thread alive
     while True:
         time.sleep(60)
