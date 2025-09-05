@@ -6,35 +6,28 @@ import threading
 import json
 from datetime import datetime, timedelta
 from queue import Queue
-from flask import Flask
 from kickapi import KickAPI
 
 # =====================================================
 # --- Environment Variables ---
 # =====================================================
-# Facebook
 FB_PAGE_ID = os.getenv("FB_PAGE_ID")
 FB_PAGE_TOKEN = os.getenv("FB_PAGE_TOKEN")
 FB_APP_ID = os.getenv("FB_APP_ID")
 FB_APP_SECRET = os.getenv("FB_APP_SECRET")
 
-# Kick
 KICK_CHANNEL = os.getenv("KICK_CHANNEL", "")
 KICK_POLL_INTERVAL = float(os.getenv("KICK_POLL_INTERVAL", 5))
 KICK_TIME_WINDOW_MINUTES = float(os.getenv("KICK_TIME_WINDOW_MINUTES", 0.1))
 
-# YouTube
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
 YOUTUBE_CHANNEL_ID = os.getenv("YOUTUBE_CHANNEL_ID", "")
 YOUTUBE_NTFY_DELAY = float(os.getenv("YOUTUBE_NTFY_DELAY", 2))
 
-# NTFY
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "streamchats123")
 
-# Per-user last message tracking
 kick_last_message_by_user = {}
 yt_last_message_by_user = {}
-
 
 # =====================================================
 # --- Global Tracking ---
@@ -50,9 +43,7 @@ kick_queue = []
 yt_sent_messages = set()
 
 GRAPH = "https://graph.facebook.com/v20.0"
-fb_app = Flask(__name__)
-
-MAX_SHORT_MSG_LEN = 97  # NTFY short message limit
+MAX_SHORT_MSG_LEN = 97
 
 # =====================================================
 # --- NTFY Worker ---
@@ -110,7 +101,7 @@ def ntfy_worker():
         ntfy_queue.task_done()
 
 # =====================================================
-# --- Facebook Graph API Polling ---
+# --- Facebook ---
 # =====================================================
 def safe_request(url, params):
     try:
@@ -145,11 +136,7 @@ def refresh_fb_token():
 
 def get_live_video():
     url = f"{GRAPH}/{FB_PAGE_ID}/videos"
-    params = {
-        "fields": "id,description,live_status,created_time",
-        "access_token": FB_PAGE_TOKEN,
-        "limit": 10,
-    }
+    params = {"fields": "id,description,live_status,created_time","access_token": FB_PAGE_TOKEN,"limit": 10}
     res = safe_request(url, params).get("data", [])
     for v in res:
         if v.get("live_status") == "LIVE":
@@ -159,12 +146,7 @@ def get_live_video():
 
 def fetch_new_comments(video_id):
     url = f"{GRAPH}/{video_id}/comments"
-    params = {
-        "fields": "id,from{name},message,created_time",
-        "order": "reverse_chronological",
-        "access_token": FB_PAGE_TOKEN,
-        "limit": 25,
-    }
+    params = {"fields": "id,from{name},message,created_time","order": "reverse_chronological","access_token": FB_PAGE_TOKEN,"limit": 25}
     res = safe_request(url, params)
     items = res.get("data", [])
     fresh = []
@@ -192,7 +174,7 @@ def listen_facebook():
             time.sleep(5)
     print(f"💬 [Facebook] Listening for comments on video: {video_id}")
     while True:
-        if time.time() - last_token_refresh > 3000:  # ~50 min
+        if time.time() - last_token_refresh > 3000:
             refresh_fb_token()
             last_token_refresh = time.time()
         comments = fetch_new_comments(video_id)
@@ -205,7 +187,7 @@ def listen_facebook():
         time.sleep(1)
 
 # =====================================================
-# --- Kick Section ---
+# --- Kick ---
 # =====================================================
 EMOJI_MAP = {"GiftedYAY": "🎉", "ErectDance": "💃"}
 emoji_pattern = r"\[emote:(\d+):([^\]]+)\]"
@@ -243,7 +225,6 @@ def listen_kick():
                     text = extract_emoji(getattr(msg, "text", ""))
                     msg_id = getattr(msg, "id", f"{msg.sender.username}:{text}")
                     user = msg.sender.username
-                    # Skip duplicates per ID or same message from same user
                     if msg_id in kick_seen_ids or kick_last_message_by_user.get(user) == text:
                         continue
                     kick_seen_ids.add(msg_id)
@@ -259,42 +240,51 @@ def listen_kick():
             time.sleep(KICK_POLL_INTERVAL)
 
 # =====================================================
-# --- YouTube Section ---
+# --- YouTube (Optimized) ---
 # =====================================================
 def listen_youtube():
     print("📡 [YouTube] Connecting...")
     if not YOUTUBE_API_KEY or not YOUTUBE_CHANNEL_ID:
         print("⚠️ [YouTube] API not set, skipping.")
         return
+
     global yt_sent_messages, yt_last_message_by_user
+
     while True:
         try:
+            # Step 1: Find live video
             search_url = f"https://www.googleapis.com/youtube/v3/search?part=snippet&channelId={YOUTUBE_CHANNEL_ID}&eventType=live&type=video&maxResults=1&key={YOUTUBE_API_KEY}"
             resp = requests.get(search_url).json()
             if not resp.get("items"):
-                print("❌ [YouTube] No live stream found, retrying...")
+                print("❌ [YouTube] No live stream found, retrying in 30s...")
                 time.sleep(30)
                 continue
+
             video_id = resp["items"][0]["id"]["videoId"]
-            url = f"https://www.googleapis.com/youtube/v3/videos?part=liveStreamingDetails&id={video_id}&key={YOUTUBE_API_KEY}"
-            details = requests.get(url).json()
+
+            # Step 2: Get live chat ID
+            details_url = f"https://www.googleapis.com/youtube/v3/videos?part=liveStreamingDetails&id={video_id}&key={YOUTUBE_API_KEY}"
+            details = requests.get(details_url).json()
             live_chat_id = details["items"][0]["liveStreamingDetails"].get("activeLiveChatId")
             if not live_chat_id:
-                print("❌ [YouTube] No active chat found, retrying...")
+                print("❌ [YouTube] No active chat found, retrying in 30s...")
                 time.sleep(30)
                 continue
+
             print("✅ [YouTube] Connected to live chat!")
             page_token = None
+
+            # Step 3: Poll messages using YouTube recommended interval
             while True:
                 chat_url = f"https://www.googleapis.com/youtube/v3/liveChat/messages?liveChatId={live_chat_id}&part=snippet,authorDetails&key={YOUTUBE_API_KEY}"
                 if page_token:
                     chat_url += f"&pageToken={page_token}"
                 data = requests.get(chat_url).json()
+
                 for item in data.get("items", []):
                     msg_id = item["id"]
                     user = item["authorDetails"]["displayName"]
                     msg = item["snippet"]["displayMessage"]
-                    # Skip duplicates per ID or same message from same user
                     if msg_id in yt_sent_messages or yt_last_message_by_user.get(user) == msg:
                         continue
                     yt_sent_messages.add(msg_id)
@@ -302,35 +292,33 @@ def listen_youtube():
                     print(f"[YouTube] {user}: {msg}")
                     ntfy_queue.put({"title": "YouTube", "user": user, "msg": msg})
                     time.sleep(YOUTUBE_NTFY_DELAY)
+
                 page_token = data.get("nextPageToken")
-                time.sleep(data.get("pollingIntervalMillis", 5000) / 1000)
+                # Adaptive polling interval
+                interval = data.get("pollingIntervalMillis", 5000) / 1000
+                time.sleep(interval)
+
         except Exception as e:
-            print("⚠️ [YouTube] Error, retrying:", e)
+            print("⚠️ [YouTube] Error, retrying in 30s...", e)
             yt_sent_messages = set()
             yt_last_message_by_user = {}
             time.sleep(30)
 
 # =====================================================
-# --- Start Listeners ---
+# --- Start All Listeners ---
 # =====================================================
-_listeners_started = False
 def start_all_listeners():
-    global _listeners_started
-    if _listeners_started:
-        return
     threading.Thread(target=ntfy_worker, daemon=True).start()
     threading.Thread(target=listen_facebook, daemon=True).start()
     threading.Thread(target=listen_kick, daemon=True).start()
     threading.Thread(target=listen_youtube, daemon=True).start()
-    _listeners_started = True
     print("✅ All listeners started.")
 
-@fb_app.route("/", methods=["GET"])
-def home():
-    start_all_listeners()
-    return "Livechat service is running!", 200
-
+# =====================================================
+# --- Entry Point ---
+# =====================================================
 if __name__ == "__main__":
     start_all_listeners()
-    port = int(os.getenv("PORT", 8080))
-    fb_app.run(host="0.0.0.0", port=port)
+    # Keep the main thread alive
+    while True:
+        time.sleep(60)
