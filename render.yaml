@@ -2,10 +2,31 @@ services:
   - type: web
     name: livechat-service
     env: python
+    plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn -w 4 -b 0.0.0.0:$PORT main:fb_app
+    startCommand: gunicorn main:fb_app --workers=1 --threads=8 --timeout=0
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.11
-      - key: PORT
-        value: 8080
+      - key: FB_PAGE_ID
+        sync: false
+      - key: FB_PAGE_TOKEN
+        sync: false
+      - key: FB_VERIFY_TOKEN
+        sync: false
+      - key: FB_APP_ID
+        sync: false
+      - key: FB_APP_SECRET
+        sync: false
+      - key: KICK_CHANNEL
+        sync: false
+      - key: KICK_POLL_INTERVAL
+        sync: false
+      - key: KICK_TIME_WINDOW_MINUTES
+        sync: false
+      - key: YOUTUBE_API_KEY
+        sync: false
+      - key: YOUTUBE_CHANNEL_ID
+        sync: false
+      - key: YOUTUBE_NTFY_DELAY
+        sync: false
+      - key: NTFY_TOPIC
+        sync: false
