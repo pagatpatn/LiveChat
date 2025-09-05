@@ -128,16 +128,19 @@ def ntfy_worker():
 GRAPH = "https://graph.facebook.com/v20.0"
 fb_app = Flask(__name__)
 
+active_fb_video_id = None  # track current live video
+
 @fb_app.route("/webhook", methods=["GET", "POST"])
 def facebook_webhook():
+    global active_fb_video_id
     if request.method == "GET":
         mode = request.args.get("hub.mode")
         token = request.args.get("hub.verify_token")
         challenge = request.args.get("hub.challenge")
         if mode == "subscribe" and token == FB_VERIFY_TOKEN:
-            print("✅ Facebook webhook verified successfully!", flush=True)
+            print("✅ [Facebook] Webhook verified successfully!", flush=True)
             return challenge, 200
-        print("❌ Facebook webhook verification failed!", flush=True)
+        print("❌ [Facebook] Webhook verification failed!", flush=True)
         return "Verification failed", 403
 
     if request.method == "POST":
@@ -148,32 +151,61 @@ def facebook_webhook():
                     value = change.get("value", {})
                     video_id = value.get("id")
                     desc = value.get("description", "(no description)")
-                    print(f"🎬 [Facebook] Live video: {video_id} | {desc}", flush=True)
-                    for comment in value.get("comments", {}).get("data", []):
-                        user = comment.get("from", {}).get("name", "Unknown")
-                        msg = comment.get("message", "")
-                        print(f"[Facebook] {user}: {msg}", flush=True)
-                        ntfy_queue.put({"title": "Facebook", "user": user, "msg": msg})
+                    active_fb_video_id = video_id
+                    print(f"🎬 [Facebook] Live video detected: {video_id} | {desc}", flush=True)
         return "OK", 200
 
+
 def listen_facebook():
-    print("📡 [Facebook] Connecting to webhook...", flush=True)
+    """Ensure webhook subscription stays alive + start polling comments."""
+    print("📡 [Facebook] Connecting to webhook & starting poller...", flush=True)
     retries = 0
     while True:
         try:
             if FB_PAGE_TOKEN and FB_PAGE_ID:
+                # Subscribe this app to page live_videos
                 url = f"{GRAPH}/{FB_PAGE_ID}/subscribed_apps"
                 params = {"access_token": FB_PAGE_TOKEN, "subscribed_fields": "live_videos"}
                 res = requests.post(url, params=params).json()
-                if "success" in res:
-                    print("✅ [Facebook] Connected & subscribed to live video events.", flush=True)
-                    return
+                if res.get("success"):
+                    print("✅ [Facebook] Subscribed to live video events.", flush=True)
+                    break
             print("❌ [Facebook] Subscription failed, retrying...", flush=True)
             retries += 1
             time.sleep(10)
         except Exception as e:
-            print("⚠️ [Facebook] Error:", e, flush=True)
+            print("⚠️ [Facebook] Subscription error:", e, flush=True)
             time.sleep(10)
+
+    # Once subscribed, start polling comments if video is active
+    while True:
+        try:
+            if not active_fb_video_id:
+                time.sleep(5)
+                continue
+
+            url = f"{GRAPH}/{active_fb_video_id}/comments"
+            params = {
+                "access_token": FB_PAGE_TOKEN,
+                "order": "reverse_chronological",
+                "filter": "stream"
+            }
+            resp = requests.get(url, params=params).json()
+            for comment in resp.get("data", []):
+                cid = comment["id"]
+                if cid in fb_seen_comment_ids:
+                    continue
+                fb_seen_comment_ids.add(cid)
+                user = comment.get("from", {}).get("name", "Unknown")
+                msg = comment.get("message", "")
+                print(f"[Facebook] {user}: {msg}", flush=True)
+                ntfy_queue.put({"title": "Facebook", "user": user, "msg": msg})
+
+            time.sleep(5)
+        except Exception as e:
+            print("⚠️ [Facebook] Polling error:", e, flush=True)
+            time.sleep(10)
+
 
 # -----------------------------
 # --- Kick Section ---
