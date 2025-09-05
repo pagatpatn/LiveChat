@@ -9,9 +9,15 @@ from queue import Queue
 from flask import Flask, request, abort
 from kickapi import KickAPI
 
-# -----------------------------
-# --- Config / Env Variables ---
-# -----------------------------
+# =====================================================
+# === CHANGES SECTION (edit only this part if needed) ==
+# =====================================================
+MAX_SHORT_MSG_LEN = 95       # max length for "short" NTFY messages
+WORD_BREAK_LEN = 30          # long words broken every X chars
+SPLIT_MSG_LEN = 2000         # chunk size for splitting long messages
+NTFY_PART_DELAY = 3          # seconds delay between parts
+NTFY_COOLDOWN = 5            # min seconds between notifications
+
 # Facebook
 FB_PAGE_ID = os.getenv("FB_PAGE_ID")
 FB_PAGE_TOKEN = os.getenv("FB_PAGE_TOKEN")
@@ -29,6 +35,10 @@ YOUTUBE_NTFY_DELAY = float(os.getenv("YOUTUBE_NTFY_DELAY", 2))
 
 # NTFY
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "streamchats123")
+
+# =====================================================
+# === END OF CHANGES SECTION ==========================
+# =====================================================
 
 # -----------------------------
 # --- Global Tracking ---
@@ -53,21 +63,19 @@ last_checked_video_id = None
 # -----------------------------
 # --- NTFY Worker ---
 # -----------------------------
-MAX_SHORT_MSG_LEN = 95
-
 def clean_single_line(msg: str) -> str:
     """Force message into a single line and prevent ntfy from wrapping long words"""
     flat = " ".join(msg.replace("\n", " ").replace("\r", " ").split())
     fixed_words = []
     for word in flat.split():
-        if len(word) > 30:
-            chunks = [word[i:i+30] for i in range(0, len(word), 30)]
+        if len(word) > WORD_BREAK_LEN:
+            chunks = [word[i:i+WORD_BREAK_LEN] for i in range(0, len(word), WORD_BREAK_LEN)]
             fixed_words.append("\u200B".join(chunks))
         else:
             fixed_words.append(word)
     return " ".join(fixed_words)
 
-def split_message(text, max_len=2000):
+def split_message(text, max_len=SPLIT_MSG_LEN):
     """Split long text into chunks with word boundaries"""
     parts = []
     while len(text) > max_len:
@@ -88,8 +96,8 @@ def ntfy_worker():
             break
         try:
             now = time.time()
-            if now - last_ntfy_sent < 5:
-                time.sleep(5 - (now - last_ntfy_sent))
+            if now - last_ntfy_sent < NTFY_COOLDOWN:
+                time.sleep(NTFY_COOLDOWN - (now - last_ntfy_sent))
 
             title = msg_obj.get("title", "Chat")
             user = msg_obj.get("user", "Unknown")
@@ -108,7 +116,7 @@ def ntfy_worker():
                 )
             else:
                 # long message → split into parts
-                parts = split_message(body, 2000)
+                parts = split_message(body, SPLIT_MSG_LEN)
                 for i, part in enumerate(parts, 1):
                     part_title = f"{title} [{i}/{len(parts)}]"
                     requests.post(
@@ -118,7 +126,7 @@ def ntfy_worker():
                         timeout=5,
                     )
                     if i < len(parts):
-                        time.sleep(3)  # 3s between parts
+                        time.sleep(NTFY_PART_DELAY)
 
             last_ntfy_sent = time.time()
 
@@ -138,7 +146,6 @@ def refresh_fb_token():
         print("⚠️ No FB_PAGE_TOKEN set", flush=True)
         return
     try:
-        # Long-lived token refresh (60 days)
         url = f"https://graph.facebook.com/v20.0/oauth/access_token"
         params = {
             "grant_type": "fb_exchange_token",
@@ -204,7 +211,7 @@ def listen_facebook():
 # -----------------------------
 # --- Kick Section ---
 # -----------------------------
-EMOJI_MAP = {"GiftedYAY":"🎉","ErectDance":"💃"}
+EMOJI_MAP = {"GiftedYAY": "🎉", "ErectDance": "💃"}
 emoji_pattern = r"\[emote:(\d+):([^\]]+)\]"
 
 def extract_emoji(text: str) -> str:
@@ -342,7 +349,6 @@ def start_all_listeners():
     with _listeners_lock:
         if _listeners_started:
             return
-        # start ntfy worker and other listeners
         threading.Thread(target=ntfy_worker, daemon=True).start()
         threads = [
             threading.Thread(target=listen_facebook, daemon=True),
@@ -354,23 +360,19 @@ def start_all_listeners():
         _listeners_started = True
         print("✅ All background listeners started.", flush=True)
 
-# Start listeners automatically on first HTTP request (works with Gunicorn/Render)
 @fb_app.before_first_request
 def _start_listeners_on_request():
     start_all_listeners()
 
-# Simple health route so / doesn't 404 (helps Render and debugging)
 @fb_app.route("/", methods=["GET"])
 def home():
     return "Livechat service is running!", 200
 
-# Optional favicon handler to suppress 404 lines for favicon requests
 @fb_app.route("/favicon.ico")
 def favicon():
     return "", 204
 
 if __name__ == "__main__":
-    # If running directly (python main.py), start listeners now and run Flask
     start_all_listeners()
     port = int(os.getenv("PORT", 8080))
     fb_app.run(host="0.0.0.0", port=port)
