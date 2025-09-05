@@ -43,12 +43,12 @@ kick_queue = []
 yt_sent_messages = set()
 
 kick_api = KickAPI()
-GRAPH = "https://graph.facebook.com/v20.0"
-MAX_SHORT_MSG_LEN = 97
 
 # =====================================================
 # --- NTFY Worker ---
 # =====================================================
+MAX_SHORT_MSG_LEN = 107  # NTFY short message limit
+
 def clean_single_line(msg: str) -> str:
     flat = " ".join(msg.replace("\n", " ").replace("\r", " ").split())
     fixed_words = []
@@ -60,7 +60,8 @@ def clean_single_line(msg: str) -> str:
             fixed_words.append(word)
     return " ".join(fixed_words)
 
-def split_message(text, max_len=2000):
+def split_message(text, max_len=MAX_SHORT_MSG_LEN):
+    """Split text into parts, each not exceeding max_len."""
     parts = []
     while len(text) > max_len:
         split_at = text.rfind(" ", 0, max_len)
@@ -82,28 +83,43 @@ def ntfy_worker():
             now = time.time()
             if now - last_ntfy_sent < 5:
                 time.sleep(5 - (now - last_ntfy_sent))
+
             title = msg_obj.get("title", "Chat")
             user = msg_obj.get("user", "Unknown")
             msg = msg_obj.get("msg", "")
             clean_msg = clean_single_line(msg)
             body = f"{user}: {clean_msg}"
+
+            # Send in chunks if message exceeds MAX_SHORT_MSG_LEN
             if len(body) <= MAX_SHORT_MSG_LEN:
-                requests.post(f"https://ntfy.sh/{NTFY_TOPIC}", data=body.encode("utf-8"), headers={"Title": title}, timeout=5)
+                requests.post(f"https://ntfy.sh/{NTFY_TOPIC}",
+                              data=body.encode("utf-8"),
+                              headers={"Title": title},
+                              timeout=5)
             else:
-                parts = split_message(body, 2000)
+                parts = split_message(body, MAX_SHORT_MSG_LEN)
                 for i, part in enumerate(parts, 1):
                     part_title = f"{title} [{i}/{len(parts)}]" if len(parts) > 1 else title
-                    requests.post(f"https://ntfy.sh/{NTFY_TOPIC}", data=part.encode("utf-8"), headers={"Title": part_title}, timeout=5)
+                    requests.post(f"https://ntfy.sh/{NTFY_TOPIC}",
+                                  data=part.encode("utf-8"),
+                                  headers={"Title": part_title},
+                                  timeout=5)
                     if i < len(parts):
                         time.sleep(3)
+
             last_ntfy_sent = time.time()
+
         except Exception as e:
             print("⚠️ Failed to send NTFY:", e)
+
         ntfy_queue.task_done()
+
 
 # =====================================================
 # --- Facebook ---
 # =====================================================
+GRAPH = "https://graph.facebook.com/v20.0"
+
 def safe_request(url, params):
     try:
         res = requests.get(url, params=params, timeout=10)
