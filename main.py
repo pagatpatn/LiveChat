@@ -31,6 +31,10 @@ YOUTUBE_NTFY_DELAY = float(os.getenv("YOUTUBE_NTFY_DELAY", 2))
 # NTFY
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "streamchats123")
 
+kick_last_message_by_user = {}
+yt_last_message_by_user = {}
+
+
 # =====================================================
 # --- Global Tracking ---
 # =====================================================
@@ -237,9 +241,13 @@ def listen_kick():
                 for msg in chat.messages:
                     text = extract_emoji(getattr(msg, "text", ""))
                     msg_id = getattr(msg, "id", f"{msg.sender.username}:{text}")
-                    if msg_id not in kick_seen_ids:
-                        kick_seen_ids.add(msg_id)
-                        kick_queue.append({"username": msg.sender.username, "text": text})
+                    user = msg.sender.username
+                    # Skip duplicates
+                    if msg_id in kick_seen_ids or kick_last_message_by_user.get(user) == text:
+                        continue
+                    kick_seen_ids.add(msg_id)
+                    kick_last_message_by_user[user] = text
+                    kick_queue.append({"username": user, "text": text})
             if kick_queue:
                 m = kick_queue.pop(0)
                 print(f"[Kick] {m['username']}: {m['text']}")
@@ -249,6 +257,7 @@ def listen_kick():
             print("⚠️ [Kick] Listener error, retrying:", e)
             time.sleep(KICK_POLL_INTERVAL)
 
+
 # =====================================================
 # --- YouTube Section ---
 # =====================================================
@@ -257,7 +266,7 @@ def listen_youtube():
     if not YOUTUBE_API_KEY or not YOUTUBE_CHANNEL_ID:
         print("⚠️ [YouTube] API not set, skipping.")
         return
-    global yt_sent_messages
+    global yt_sent_messages, yt_last_message_by_user
     while True:
         try:
             search_url = f"https://www.googleapis.com/youtube/v3/search?part=snippet&channelId={YOUTUBE_CHANNEL_ID}&eventType=live&type=video&maxResults=1&key={YOUTUBE_API_KEY}"
@@ -283,11 +292,13 @@ def listen_youtube():
                 data = requests.get(chat_url).json()
                 for item in data.get("items", []):
                     msg_id = item["id"]
-                    if msg_id in yt_sent_messages:
-                        continue
-                    yt_sent_messages.add(msg_id)
                     user = item["authorDetails"]["displayName"]
                     msg = item["snippet"]["displayMessage"]
+                    # Skip duplicates
+                    if msg_id in yt_sent_messages or yt_last_message_by_user.get(user) == msg:
+                        continue
+                    yt_sent_messages.add(msg_id)
+                    yt_last_message_by_user[user] = msg
                     print(f"[YouTube] {user}: {msg}")
                     ntfy_queue.put({"title": "YouTube", "user": user, "msg": msg})
                     time.sleep(YOUTUBE_NTFY_DELAY)
@@ -296,7 +307,9 @@ def listen_youtube():
         except Exception as e:
             print("⚠️ [YouTube] Error, retrying:", e)
             yt_sent_messages = set()
+            yt_last_message_by_user = {}
             time.sleep(30)
+
 
 # =====================================================
 # --- Start Listeners ---
