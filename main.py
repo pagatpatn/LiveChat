@@ -126,24 +126,112 @@ def ntfy_worker():
 # --- Facebook Section ---
 # -----------------------------
 GRAPH = "https://graph.facebook.com/v20.0"
-fb_app = Flask(__name__)
+active_fb_video_id = None
+fb_polling_thread = None
 
-# Global state for Facebook
-fb_current_video_id = None
-fb_stop_polling = threading.Event()
+fb_seen_comment_ids = set()
+fb_last_message_by_user = {}
+
+def refresh_fb_token():
+    global FB_PAGE_TOKEN
+    if not FB_PAGE_TOKEN:
+        print("⚠️ No FB_PAGE_TOKEN set", flush=True)
+        return
+    try:
+        url = f"{GRAPH}/oauth/access_token"
+        params = {
+            "grant_type": "fb_exchange_token",
+            "client_id": os.getenv("FB_APP_ID"),
+            "client_secret": os.getenv("FB_APP_SECRET"),
+            "fb_exchange_token": FB_PAGE_TOKEN,
+        }
+        res = requests.get(url, params=params).json()
+        if "access_token" in res:
+            FB_PAGE_TOKEN = res["access_token"]
+            print("✅ Facebook page access token refreshed", flush=True)
+    except Exception as e:
+        print("❌ Failed to refresh token:", e, flush=True)
+
+
+def safe_request(url, params):
+    try:
+        res = requests.get(url, params=params, timeout=10)
+        data = res.json()
+        if "error" in data:
+            print(f"⚠️ Facebook API error: {data}", flush=True)
+            return {}
+        return data
+    except Exception as e:
+        print("❌ Facebook request failed:", e, flush=True)
+        return {}
+
+
+def get_live_video():
+    """Return the first active live video ID"""
+    params = {
+        "fields": "id,description,live_status,created_time",
+        "access_token": FB_PAGE_TOKEN,
+        "limit": 10
+    }
+    data = safe_request(f"{GRAPH}/{FB_PAGE_ID}/videos", params).get("data", [])
+    for v in data:
+        if v.get("live_status") == "LIVE":
+            print(f"🎬 [Facebook] Live video detected: {v['id']} | {v.get('description','(no desc)')}", flush=True)
+            return v["id"]
+    return None
+
+
+def fetch_new_comments(video_id):
+    """Fetch only new comments from live video"""
+    params = {
+        "fields": "id,from{name},message,created_time",
+        "order": "reverse_chronological",
+        "access_token": FB_PAGE_TOKEN,
+        "limit": 25
+    }
+    data = safe_request(f"{GRAPH}/{video_id}/comments", params)
+    fresh = []
+    for c in data.get("data", []):
+        cid = c.get("id")
+        if not cid or cid in fb_seen_comment_ids:
+            continue
+        user = c.get("from", {}).get("name", "Unknown")
+        msg = c.get("message", "")
+        if fb_last_message_by_user.get(user) == msg:
+            continue
+        fb_seen_comment_ids.add(cid)
+        fb_last_message_by_user[user] = msg
+        fresh.append(c)
+    fresh.reverse()
+    return fresh
+
+
+def poll_fb_comments(video_id):
+    """Thread to continuously poll live comments"""
+    print("💬 [Facebook] Listening for comments...", flush=True)
+    global fb_seen_comment_ids, fb_last_message_by_user
+    while True:
+        new_comments = fetch_new_comments(video_id)
+        for c in new_comments:
+            ts = c.get("created_time", "")
+            user = c.get("from", {}).get("name", "Unknown")
+            msg = c.get("message", "")
+            print(f"[Facebook {ts}] {user}: {msg}", flush=True)
+            ntfy_queue.put(c)
+        time.sleep(1)
+
 
 @fb_app.route("/webhook", methods=["GET", "POST"])
 def facebook_webhook():
-    global fb_current_video_id, fb_stop_polling
-
+    global active_fb_video_id, fb_polling_thread
     if request.method == "GET":
         mode = request.args.get("hub.mode")
         token = request.args.get("hub.verify_token")
         challenge = request.args.get("hub.challenge")
         if mode == "subscribe" and token == FB_VERIFY_TOKEN:
-            print("✅ [Facebook] Webhook verified successfully!", flush=True)
+            print("✅ Facebook webhook verified successfully!", flush=True)
             return challenge, 200
-        print("❌ [Facebook] Webhook verification failed!", flush=True)
+        print("❌ Facebook webhook verification failed!", flush=True)
         return "Verification failed", 403
 
     if request.method == "POST":
@@ -152,89 +240,38 @@ def facebook_webhook():
             for change in entry.get("changes", []):
                 if change.get("field") == "live_videos":
                     value = change.get("value", {})
-                    video_id = value.get("id")
+                    vid = value.get("id")
                     desc = value.get("description", "(no description)")
-                    print(f"🎬 [Facebook] Live video detected: {video_id} | {desc}", flush=True)
+                    print(f"🎬 [Facebook] Live video event received: {vid} | {desc}", flush=True)
 
-                    # Reset stop flag and update current video
-                    fb_stop_polling.clear()
-                    fb_current_video_id = video_id
-
-                    # Start polling thread for this live
-                    threading.Thread(target=poll_facebook_comments, daemon=True).start()
+                    if vid != active_fb_video_id:
+                        active_fb_video_id = vid
+                        # Start polling comments in a new thread
+                        if fb_polling_thread is None or not fb_polling_thread.is_alive():
+                            fb_polling_thread = threading.Thread(target=poll_fb_comments, args=(vid,), daemon=True)
+                            fb_polling_thread.start()
+                            print("📡 [Facebook] Started comment polling thread", flush=True)
         return "OK", 200
 
 
-def poll_facebook_comments():
-    """Polls Graph API for comments on the active live video"""
-    global fb_current_video_id, fb_stop_polling
-
-    if not fb_current_video_id:
-        return
-
-    video_id = fb_current_video_id
-    print(f"📡 [Facebook] Connecting to comments for live {video_id}...", flush=True)
-
-    seen_ids = set()
-    retries = 0
-
-    while not fb_stop_polling.is_set():
-        try:
-            url = f"{GRAPH}/{video_id}/live_comments"
-            params = {
-                "access_token": FB_PAGE_TOKEN,
-                "comment_rate": "one_per_two_seconds",
-                "fields": "from,message,created_time",
-            }
-            res = requests.get(url, params=params, timeout=10).json()
-
-            if "error" in res:
-                print(f"⚠️ [Facebook] API error: {res['error']}", flush=True)
-                retries += 1
-                time.sleep(min(10 * retries, 60))
-                continue
-
-            comments = res.get("data", [])
-            if comments:
-                for c in comments:
-                    cid = c.get("id")
-                    if cid in seen_ids:
-                        continue
-                    seen_ids.add(cid)
-                    user = c.get("from", {}).get("name", "Unknown")
-                    msg = c.get("message", "")
-                    print(f"[Facebook] {user}: {msg}", flush=True)
-                    ntfy_queue.put({"title": "Facebook", "user": user, "msg": msg})
-                retries = 0  # reset retries after success
-            else:
-                time.sleep(3)
-
-        except Exception as e:
-            print("❌ [Facebook] Polling error:", e, flush=True)
-            retries += 1
-            time.sleep(min(10 * retries, 60))
-
-
 def listen_facebook():
-    """Subscribes the app to receive live video webhooks"""
-    print("📡 [Facebook] Connecting to webhook subscription...", flush=True)
-    retries = 0
+    """Initial Facebook setup"""
+    print("📡 [Facebook] Connecting...", flush=True)
     while True:
         try:
-            if FB_PAGE_TOKEN and FB_PAGE_ID:
-                url = f"{GRAPH}/{FB_PAGE_ID}/subscribed_apps"
-                params = {"access_token": FB_PAGE_TOKEN, "subscribed_fields": "live_videos"}
-                res = requests.post(url, params=params).json()
-                if "success" in res and res["success"]:
-                    print("✅ [Facebook] Subscribed to live video events.", flush=True)
-                    return
+            refresh_fb_token()
+            url = f"{GRAPH}/{FB_PAGE_ID}/subscribed_apps"
+            params = {"access_token": FB_PAGE_TOKEN, "subscribed_fields": "live_videos"}
+            res = requests.post(url, params=params).json()
+            if "success" in res:
+                print("✅ [Facebook] Subscribed to live video events.", flush=True)
+                return
             print("❌ [Facebook] Subscription failed, retrying...", flush=True)
-            retries += 1
-            time.sleep(min(10 * retries, 60))
+            time.sleep(10)
         except Exception as e:
-            print("⚠️ [Facebook] Subscription error:", e, flush=True)
-            retries += 1
-            time.sleep(min(10 * retries, 60))
+            print("⚠️ [Facebook] Error during subscription:", e, flush=True)
+            time.sleep(10)
+
 
 
 # -----------------------------
