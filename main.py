@@ -47,7 +47,7 @@ kick_api = KickAPI()
 # =====================================================
 # --- NTFY Worker ---
 # =====================================================
-MAX_SHORT_MSG_LEN = 115  # NTFY short message limit
+MAX_SHORT_MSG_LEN = 120  # NTFY short message limit
 
 def clean_single_line(msg: str) -> str:
     flat = " ".join(msg.replace("\n", " ").replace("\r", " ").split())
