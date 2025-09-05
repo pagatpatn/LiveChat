@@ -9,14 +9,6 @@ from queue import Queue
 from flask import Flask, request, abort
 from kickapi import KickAPI
 
-# =====================================================
-# === CHANGES SECTION (edit only this part if needed) ==
-# =====================================================
-WORD_BREAK_LEN = 30          # long words broken every X chars
-SPLIT_MSG_LEN = 2000         # chunk size for splitting long messages
-NTFY_PART_DELAY = 3          # seconds delay between parts
-NTFY_COOLDOWN = 5            # min seconds between notifications
-
 # Facebook
 FB_PAGE_ID = os.getenv("FB_PAGE_ID")
 FB_PAGE_TOKEN = os.getenv("FB_PAGE_TOKEN")
@@ -57,7 +49,7 @@ yt_sent_messages = set()
 import time
 import requests
 
-MAX_SHORT_MSG_LEN = 98  # short message limit
+MAX_SHORT_MSG_LEN = 97  # short message limit
 
 def clean_single_line(msg: str) -> str:
     """Force message into a single line and prevent ntfy from wrapping long words"""
