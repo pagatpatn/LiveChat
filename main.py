@@ -46,19 +46,11 @@ NTFY_TOPIC = os.getenv("NTFY_TOPIC", "streamchats123")
 ntfy_queue = Queue()
 last_ntfy_sent = 0
 
-# Facebook
 fb_seen_comment_ids = set()
-fb_last_message_by_user = {}
-fb_last_comment_time = None
-
-# Kick
 kick_api = KickAPI()
 kick_seen_ids = set()
 kick_queue = []
-
-# YouTube
 yt_sent_messages = set()
-last_checked_video_id = None
 
 # -----------------------------
 # --- NTFY Worker ---
@@ -145,7 +137,7 @@ def facebook_webhook():
         if mode == "subscribe" and token == FB_VERIFY_TOKEN:
             print("✅ Facebook webhook verified successfully!", flush=True)
             return challenge, 200
-        print("❌ Verification failed!", flush=True)
+        print("❌ Facebook webhook verification failed!", flush=True)
         return "Verification failed", 403
 
     if request.method == "POST":
@@ -164,6 +156,25 @@ def facebook_webhook():
                         ntfy_queue.put({"title": "Facebook", "user": user, "msg": msg})
         return "OK", 200
 
+def listen_facebook():
+    print("📡 [Facebook] Connecting to webhook...", flush=True)
+    retries = 0
+    while True:
+        try:
+            if FB_PAGE_TOKEN and FB_PAGE_ID:
+                url = f"{GRAPH}/{FB_PAGE_ID}/subscribed_apps"
+                params = {"access_token": FB_PAGE_TOKEN, "subscribed_fields": "live_videos"}
+                res = requests.post(url, params=params).json()
+                if "success" in res:
+                    print("✅ [Facebook] Connected & subscribed to live video events.", flush=True)
+                    return
+            print("❌ [Facebook] Subscription failed, retrying...", flush=True)
+            retries += 1
+            time.sleep(10)
+        except Exception as e:
+            print("⚠️ [Facebook] Error:", e, flush=True)
+            time.sleep(10)
+
 # -----------------------------
 # --- Kick Section ---
 # -----------------------------
@@ -178,15 +189,21 @@ def extract_emoji(text: str) -> str:
     return text
 
 def listen_kick():
-    print("🔍 [Kick] Listener thread started", flush=True)
+    print("📡 [Kick] Connecting...", flush=True)
     if not KICK_CHANNEL:
-        print("⚠️ KICK_CHANNEL not set, skipping", flush=True)
+        print("⚠️ [Kick] KICK_CHANNEL not set, skipping.", flush=True)
         return
-    channel = kick_api.channel(KICK_CHANNEL)
-    if not channel:
-        print(f"⚠️ Kick channel '{KICK_CHANNEL}' not found", flush=True)
-        return
-    print(f"✅ Connected to Kick chat for channel: {channel.username}", flush=True)
+    channel = None
+    while not channel:
+        try:
+            channel = kick_api.channel(KICK_CHANNEL)
+            if not channel:
+                print("❌ [Kick] Channel not found, retrying...", flush=True)
+                time.sleep(10)
+        except Exception as e:
+            print("⚠️ [Kick] Error:", e, flush=True)
+            time.sleep(10)
+    print(f"✅ [Kick] Connected to chat: {channel.username}", flush=True)
     global kick_queue
     while True:
         try:
@@ -205,16 +222,16 @@ def listen_kick():
                 ntfy_queue.put({"title": "Kick", "user": m["username"], "msg": m["text"]})
             time.sleep(KICK_POLL_INTERVAL)
         except Exception as e:
-            print("⚠️ Kick error:", e, flush=True)
+            print("⚠️ [Kick] Listener error, retrying:", e, flush=True)
             time.sleep(KICK_POLL_INTERVAL)
 
 # -----------------------------
 # --- YouTube Section ---
 # -----------------------------
 def listen_youtube():
-    print("🔍 [YouTube] Listener thread started", flush=True)
+    print("📡 [YouTube] Connecting...", flush=True)
     if not YOUTUBE_API_KEY or not YOUTUBE_CHANNEL_ID:
-        print("⚠️ YouTube API not set", flush=True)
+        print("⚠️ [YouTube] API not set, skipping.", flush=True)
         return
     global yt_sent_messages
     while True:
@@ -222,6 +239,7 @@ def listen_youtube():
             search_url = f"https://www.googleapis.com/youtube/v3/search?part=snippet&channelId={YOUTUBE_CHANNEL_ID}&eventType=live&type=video&maxResults=1&key={YOUTUBE_API_KEY}"
             resp = requests.get(search_url).json()
             if not resp.get("items"):
+                print("❌ [YouTube] No live stream found, retrying...", flush=True)
                 time.sleep(30)
                 continue
             video_id = resp["items"][0]["id"]["videoId"]
@@ -229,9 +247,10 @@ def listen_youtube():
             details = requests.get(url).json()
             live_chat_id = details["items"][0]["liveStreamingDetails"].get("activeLiveChatId")
             if not live_chat_id:
+                print("❌ [YouTube] No active chat found, retrying...", flush=True)
                 time.sleep(30)
                 continue
-            print("✅ Connected to YouTube live chat!", flush=True)
+            print("✅ [YouTube] Connected to live chat!", flush=True)
             page_token = None
             while True:
                 chat_url = f"https://www.googleapis.com/youtube/v3/liveChat/messages?liveChatId={live_chat_id}&part=snippet,authorDetails&key={YOUTUBE_API_KEY}"
@@ -251,7 +270,7 @@ def listen_youtube():
                 page_token = data.get("nextPageToken")
                 time.sleep(data.get("pollingIntervalMillis", 5000) / 1000)
         except Exception as e:
-            print("❌ YouTube error:", e, flush=True)
+            print("⚠️ [YouTube] Error, retrying:", e, flush=True)
             yt_sent_messages = set()
             time.sleep(30)
 
@@ -264,6 +283,7 @@ def start_all_listeners():
     if _listeners_started:
         return
     threading.Thread(target=ntfy_worker, daemon=True).start()
+    threading.Thread(target=listen_facebook, daemon=True).start()
     threading.Thread(target=listen_kick, daemon=True).start()
     threading.Thread(target=listen_youtube, daemon=True).start()
     _listeners_started = True
