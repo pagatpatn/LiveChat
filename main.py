@@ -253,16 +253,46 @@ def listen_youtube():
 
     while True:
         try:
+            # Step 1: Find live video
             search_url = f"https://www.googleapis.com/youtube/v3/search?part=snippet&channelId={YOUTUBE_CHANNEL_ID}&eventType=live&type=video&maxResults=1&key={YOUTUBE_API_KEY}"
             resp = requests.get(search_url).json()
+
+            # Check for quota errors
+            if "error" in resp:
+                code = resp["error"].get("code")
+                message = resp["error"].get("message", "")
+                if code == 403 and "quota" in message.lower():
+                    print("❌ [YouTube] Quota exceeded! Waiting 1 hour before retry...")
+                    time.sleep(3600)
+                    continue
+                else:
+                    print(f"⚠️ [YouTube] API Error: {message}, retrying in 30s...")
+                    time.sleep(30)
+                    continue
+
             if not resp.get("items"):
                 print("❌ [YouTube] No live stream found, retrying in 30s...")
                 time.sleep(30)
                 continue
 
             video_id = resp["items"][0]["id"]["videoId"]
+
+            # Step 2: Get live chat ID
             details_url = f"https://www.googleapis.com/youtube/v3/videos?part=liveStreamingDetails&id={video_id}&key={YOUTUBE_API_KEY}"
             details = requests.get(details_url).json()
+
+            if "error" in details:
+                code = details["error"].get("code")
+                message = details["error"].get("message", "")
+                if code == 403 and "quota" in message.lower():
+                    print("❌ [YouTube] Quota exceeded while fetching video details! Waiting 1 hour...")
+                    time.sleep(3600)
+                    continue
+                else:
+                    print(f"⚠️ [YouTube] API Error: {message}, retrying in 30s...")
+                    time.sleep(30)
+                    continue
+
             live_chat_id = details["items"][0]["liveStreamingDetails"].get("activeLiveChatId")
             if not live_chat_id:
                 print("❌ [YouTube] No active chat found, retrying in 30s...")
@@ -272,11 +302,25 @@ def listen_youtube():
             print("✅ [YouTube] Connected to live chat!")
             page_token = None
 
+            # Step 3: Poll messages
             while True:
                 chat_url = f"https://www.googleapis.com/youtube/v3/liveChat/messages?liveChatId={live_chat_id}&part=snippet,authorDetails&key={YOUTUBE_API_KEY}"
                 if page_token:
                     chat_url += f"&pageToken={page_token}"
+
                 data = requests.get(chat_url).json()
+
+                if "error" in data:
+                    code = data["error"].get("code")
+                    message = data["error"].get("message", "")
+                    if code == 403 and "quota" in message.lower():
+                        print("❌ [YouTube] Quota exceeded while fetching chat! Waiting 1 hour...")
+                        time.sleep(3600)
+                        break
+                    else:
+                        print(f"⚠️ [YouTube] API Error: {message}, retrying in 30s...")
+                        time.sleep(30)
+                        continue
 
                 for item in data.get("items", []):
                     msg_id = item["id"]
@@ -295,8 +339,9 @@ def listen_youtube():
                 time.sleep(interval)
 
         except Exception as e:
-            print("⚠️ [YouTube] Error, retrying in 30s...", e)
+            print("⚠️ [YouTube] Unexpected error, retrying in 30s...", e)
             time.sleep(30)
+
 
 # =====================================================
 # --- Start All Listeners ---
