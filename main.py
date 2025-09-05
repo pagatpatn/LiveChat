@@ -53,7 +53,6 @@ last_checked_video_id = None
 # -----------------------------
 # --- NTFY Worker ---
 # -----------------------------
-
 MAX_SHORT_MSG_LEN = 95
 
 def clean_single_line(msg: str) -> str:
@@ -124,7 +123,7 @@ def ntfy_worker():
             last_ntfy_sent = time.time()
 
         except Exception as e:
-            print("⚠️ Failed to send NTFY:", e)
+            print("⚠️ Failed to send NTFY:", e, flush=True)
         ntfy_queue.task_done()
 
 # -----------------------------
@@ -136,7 +135,7 @@ fb_app = Flask(__name__)
 def refresh_fb_token():
     global FB_PAGE_TOKEN
     if not FB_PAGE_TOKEN:
-        print("⚠️ No FB_PAGE_TOKEN set")
+        print("⚠️ No FB_PAGE_TOKEN set", flush=True)
         return
     try:
         # Long-lived token refresh (60 days)
@@ -150,9 +149,9 @@ def refresh_fb_token():
         res = requests.get(url, params=params).json()
         if "access_token" in res:
             FB_PAGE_TOKEN = res["access_token"]
-            print("✅ Page access token refreshed!")
+            print("✅ Page access token refreshed!", flush=True)
     except Exception as e:
-        print("❌ Failed to refresh token:", e)
+        print("❌ Failed to refresh token:", e, flush=True)
 
 @fb_app.route("/webhook", methods=["GET", "POST"])
 def facebook_webhook():
@@ -161,9 +160,9 @@ def facebook_webhook():
         token = request.args.get("hub.verify_token")
         challenge = request.args.get("hub.challenge")
         if mode == "subscribe" and token == FB_VERIFY_TOKEN:
-            print("✅ Facebook webhook verified successfully!")
+            print("✅ Facebook webhook verified successfully!", flush=True)
             return challenge, 200
-        print("❌ Verification failed!")
+        print("❌ Verification failed!", flush=True)
         return "Verification failed", 403
 
     if request.method == "POST":
@@ -176,29 +175,29 @@ def facebook_webhook():
                 if field == "live_videos":
                     video_id = value.get("id")
                     desc = value.get("description", "(no description)")
-                    print(f"🎬 [Facebook] Live video started: {video_id} | {desc}")
+                    print(f"🎬 [Facebook] Live video started: {video_id} | {desc}", flush=True)
                     comments = value.get("comments", {}).get("data", [])
                     for comment in comments:
                         user = comment.get("from", {}).get("name", "Unknown")
                         msg = comment.get("message", "")
-                        print(f"[Facebook] {user}: {msg}")
+                        print(f"[Facebook] {user}: {msg}", flush=True)
                         ntfy_queue.put({"title": "Facebook", "user": user, "msg": msg})
         return "OK", 200
 
 def subscribe_facebook_page():
     if not FB_PAGE_TOKEN or not FB_PAGE_ID:
-        print("⚠️ FB_PAGE_TOKEN or FB_PAGE_ID not set")
+        print("⚠️ FB_PAGE_TOKEN or FB_PAGE_ID not set", flush=True)
         return
     url = f"{GRAPH}/{FB_PAGE_ID}/subscribed_apps"
     params = {"access_token": FB_PAGE_TOKEN, "subscribed_fields": "live_videos"}
     try:
         res = requests.post(url, params=params).json()
-        print("📡 Facebook page webhook subscription result:", res)
+        print("📡 Facebook page webhook subscription result:", res, flush=True)
     except Exception as e:
-        print("❌ Failed to subscribe Facebook webhook:", e)
+        print("❌ Failed to subscribe Facebook webhook:", e, flush=True)
 
 def listen_facebook():
-    print("🔍 [Facebook] Listener thread started")
+    print("🔍 [Facebook] Listener thread started", flush=True)
     refresh_fb_token()
     subscribe_facebook_page()
 
@@ -233,19 +232,19 @@ def get_kick_chat(channel_id: int):
                 })
         return messages
     except Exception as e:
-        print("⚠️ Error fetching Kick chat:", e)
+        print("⚠️ Error fetching Kick chat:", e, flush=True)
         return []
 
 def listen_kick():
-    print("🔍 [Kick] Listener thread started")
+    print("🔍 [Kick] Listener thread started", flush=True)
     if not KICK_CHANNEL:
-        print("⚠️ KICK_CHANNEL not set, skipping Kick listener")
+        print("⚠️ KICK_CHANNEL not set, skipping Kick listener", flush=True)
         return
     channel = kick_api.channel(KICK_CHANNEL)
     if not channel:
-        print(f"⚠️ Kick channel '{KICK_CHANNEL}' not found")
+        print(f"⚠️ Kick channel '{KICK_CHANNEL}' not found", flush=True)
         return
-    print(f"✅ Connected to Kick chat for channel: {channel.username}")
+    print(f"✅ Connected to Kick chat for channel: {channel.username}", flush=True)
     global kick_queue
     while True:
         messages = get_kick_chat(channel.id)
@@ -253,7 +252,7 @@ def listen_kick():
             if msg["id"] not in kick_seen_ids:
                 kick_seen_ids.add(msg["id"])
                 kick_queue.append(msg)
-                print(f"[Kick {msg['timestamp']}] {msg['username']}: {msg['text']}")
+                print(f"[Kick {msg['timestamp']}] {msg['username']}: {msg['text']}", flush=True)
         if kick_queue:
             msg = kick_queue.pop(0)
             ntfy_queue.put({"title": "Kick", "user": msg["username"], "msg": msg["text"]})
@@ -275,7 +274,7 @@ def get_youtube_live_chat_id():
                     return live_chat_id
             last_checked_video_id = None
 
-        print("🔍 [YouTube] Searching for active livestream...")
+        print("🔍 [YouTube] Searching for active livestream...", flush=True)
         search_url = f"https://www.googleapis.com/youtube/v3/search?part=snippet&channelId={YOUTUBE_CHANNEL_ID}&eventType=live&type=video&maxResults=1&key={YOUTUBE_API_KEY}"
         resp = requests.get(search_url).json()
         items = resp.get("items", [])
@@ -288,13 +287,13 @@ def get_youtube_live_chat_id():
         live_chat_id = resp2["items"][0]["liveStreamingDetails"].get("activeLiveChatId")
         return live_chat_id
     except Exception as e:
-        print("❌ Error fetching YouTube chat ID:", e)
+        print("❌ Error fetching YouTube chat ID:", e, flush=True)
         return None
 
 def listen_youtube():
-    print("🔍 [YouTube] Listener thread started")
+    print("🔍 [YouTube] Listener thread started", flush=True)
     if not YOUTUBE_API_KEY or not YOUTUBE_CHANNEL_ID:
-        print("⚠️ YouTube API details not set, skipping YouTube listener")
+        print("⚠️ YouTube API details not set, skipping YouTube listener", flush=True)
         return
     global yt_sent_messages
     while True:
@@ -302,7 +301,7 @@ def listen_youtube():
         if not live_chat_id:
             time.sleep(30)
             continue
-        print("✅ Connected to YouTube live chat!")
+        print("✅ Connected to YouTube live chat!", flush=True)
         page_token = None
         while True:
             try:
@@ -311,7 +310,7 @@ def listen_youtube():
                     url += f"&pageToken={page_token}"
                 resp = requests.get(url).json()
                 if "error" in resp and resp["error"]["errors"][0]["reason"] == "liveChatEnded":
-                    print("⚠️ YouTube live chat ended, resetting state...")
+                    print("⚠️ YouTube live chat ended, resetting state...", flush=True)
                     yt_sent_messages = set()
                     break
                 for item in resp.get("items", []):
@@ -321,32 +320,57 @@ def listen_youtube():
                     yt_sent_messages.add(msg_id)
                     user = item["authorDetails"]["displayName"]
                     msg = item["snippet"]["displayMessage"]
-                    print(f"[YouTube] {user}: {msg}")
+                    print(f"[YouTube] {user}: {msg}", flush=True)
                     ntfy_queue.put({"title": "YouTube", "user": user, "msg": msg})
                     time.sleep(YOUTUBE_NTFY_DELAY)
                 page_token = resp.get("nextPageToken")
                 polling_interval = resp.get("pollingIntervalMillis", 5000) / 1000
                 time.sleep(polling_interval)
             except Exception as e:
-                print("❌ Error in YouTube chat loop:", e)
+                print("❌ Error in YouTube chat loop:", e, flush=True)
                 yt_sent_messages = set()
                 break
 
 # -----------------------------
 # --- Main: Run All Listeners ---
 # -----------------------------
+_listeners_started = False
+_listeners_lock = threading.Lock()
+
 def start_all_listeners():
-    threading.Thread(target=ntfy_worker, daemon=True).start()
-    threads = [
-        threading.Thread(target=listen_facebook, daemon=True),
-        threading.Thread(target=listen_kick, daemon=True),
-        threading.Thread(target=listen_youtube, daemon=True)
-    ]
-    for t in threads:
-        t.start()
-    print("✅ All background listeners started.")
+    global _listeners_started
+    with _listeners_lock:
+        if _listeners_started:
+            return
+        # start ntfy worker and other listeners
+        threading.Thread(target=ntfy_worker, daemon=True).start()
+        threads = [
+            threading.Thread(target=listen_facebook, daemon=True),
+            threading.Thread(target=listen_kick, daemon=True),
+            threading.Thread(target=listen_youtube, daemon=True)
+        ]
+        for t in threads:
+            t.start()
+        _listeners_started = True
+        print("✅ All background listeners started.", flush=True)
+
+# Start listeners automatically on first HTTP request (works with Gunicorn/Render)
+@fb_app.before_first_request
+def _start_listeners_on_request():
+    start_all_listeners()
+
+# Simple health route so / doesn't 404 (helps Render and debugging)
+@fb_app.route("/", methods=["GET"])
+def home():
+    return "Livechat service is running!", 200
+
+# Optional favicon handler to suppress 404 lines for favicon requests
+@fb_app.route("/favicon.ico")
+def favicon():
+    return "", 204
 
 if __name__ == "__main__":
+    # If running directly (python main.py), start listeners now and run Flask
     start_all_listeners()
-    # Run Flask app (Gunicorn will use fb_app)
-    fb_app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
+    port = int(os.getenv("PORT", 8080))
+    fb_app.run(host="0.0.0.0", port=port)
