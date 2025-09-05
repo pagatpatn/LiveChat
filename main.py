@@ -12,7 +12,6 @@ from kickapi import KickAPI
 # =====================================================
 # === CHANGES SECTION (edit only this part if needed) ==
 # =====================================================
-MAX_SHORT_MSG_LEN = 95       # max length for "short" NTFY messages
 WORD_BREAK_LEN = 30          # long words broken every X chars
 SPLIT_MSG_LEN = 2000         # chunk size for splitting long messages
 NTFY_PART_DELAY = 3          # seconds delay between parts
@@ -58,7 +57,7 @@ yt_sent_messages = set()
 import time
 import requests
 
-MAX_SHORT_MSG_LEN = 105  # short message limit
+MAX_SHORT_MSG_LEN = 98  # short message limit
 
 def clean_single_line(msg: str) -> str:
     """Force message into a single line and prevent ntfy from wrapping long words"""
