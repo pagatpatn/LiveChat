@@ -241,32 +241,46 @@ def listen_kick():
             time.sleep(KICK_POLL_INTERVAL)
 
 # =====================================================
-# --- YouTube ---
+# --- YouTube with 2 API Keys ---
 # =====================================================
 def listen_youtube():
     print("📡 [YouTube] Connecting...")
-    if not YOUTUBE_API_KEY or not YOUTUBE_CHANNEL_ID:
+    if not YOUTUBE_API_KEY:
         print("⚠️ [YouTube] API not set, skipping.")
         return
 
     global yt_sent_messages, yt_last_message_by_user
 
+    api_keys = [YOUTUBE_API_KEY]
+    if os.getenv("YOUTUBE_API_KEY_2"):
+        api_keys.append(os.getenv("YOUTUBE_API_KEY_2"))
+
+    current_key_index = 0
+
+    def get_current_key():
+        return api_keys[current_key_index]
+
+    def rotate_key():
+        nonlocal current_key_index
+        current_key_index = (current_key_index + 1) % len(api_keys)
+        print(f"🔑 Rotated to YouTube API key {current_key_index+1}/{len(api_keys)}")
+
     while True:
         try:
-            # Step 1: Find live video
-            search_url = f"https://www.googleapis.com/youtube/v3/search?part=snippet&channelId={YOUTUBE_CHANNEL_ID}&eventType=live&type=video&maxResults=1&key={YOUTUBE_API_KEY}"
+            key = get_current_key()
+            search_url = f"https://www.googleapis.com/youtube/v3/search?part=snippet&channelId={YOUTUBE_CHANNEL_ID}&eventType=live&type=video&maxResults=1&key={key}"
             resp = requests.get(search_url).json()
 
-            # Check for quota errors
             if "error" in resp:
-                code = resp["error"].get("code")
-                message = resp["error"].get("message", "")
-                if code == 403 and "quota" in message.lower():
-                    print("❌ [YouTube] Quota exceeded! Waiting 1 hour before retry...")
-                    time.sleep(3600)
+                err = resp["error"]
+                reason = err.get("errors", [{}])[0].get("reason", "")
+                if err.get("code") == 403 and "quotaExceeded" in reason:
+                    print("⚠️ [YouTube] Quota exceeded for current key, rotating...")
+                    rotate_key()
+                    time.sleep(5)
                     continue
                 else:
-                    print(f"⚠️ [YouTube] API Error: {message}, retrying in 30s...")
+                    print("⚠️ [YouTube] API error:", err)
                     time.sleep(30)
                     continue
 
@@ -277,22 +291,9 @@ def listen_youtube():
 
             video_id = resp["items"][0]["id"]["videoId"]
 
-            # Step 2: Get live chat ID
-            details_url = f"https://www.googleapis.com/youtube/v3/videos?part=liveStreamingDetails&id={video_id}&key={YOUTUBE_API_KEY}"
+            # Get live chat ID
+            details_url = f"https://www.googleapis.com/youtube/v3/videos?part=liveStreamingDetails&id={video_id}&key={get_current_key()}"
             details = requests.get(details_url).json()
-
-            if "error" in details:
-                code = details["error"].get("code")
-                message = details["error"].get("message", "")
-                if code == 403 and "quota" in message.lower():
-                    print("❌ [YouTube] Quota exceeded while fetching video details! Waiting 1 hour...")
-                    time.sleep(3600)
-                    continue
-                else:
-                    print(f"⚠️ [YouTube] API Error: {message}, retrying in 30s...")
-                    time.sleep(30)
-                    continue
-
             live_chat_id = details["items"][0]["liveStreamingDetails"].get("activeLiveChatId")
             if not live_chat_id:
                 print("❌ [YouTube] No active chat found, retrying in 30s...")
@@ -302,23 +303,24 @@ def listen_youtube():
             print("✅ [YouTube] Connected to live chat!")
             page_token = None
 
-            # Step 3: Poll messages
             while True:
-                chat_url = f"https://www.googleapis.com/youtube/v3/liveChat/messages?liveChatId={live_chat_id}&part=snippet,authorDetails&key={YOUTUBE_API_KEY}"
+                key = get_current_key()
+                chat_url = f"https://www.googleapis.com/youtube/v3/liveChat/messages?liveChatId={live_chat_id}&part=snippet,authorDetails&key={key}"
                 if page_token:
                     chat_url += f"&pageToken={page_token}"
 
                 data = requests.get(chat_url).json()
 
                 if "error" in data:
-                    code = data["error"].get("code")
-                    message = data["error"].get("message", "")
-                    if code == 403 and "quota" in message.lower():
-                        print("❌ [YouTube] Quota exceeded while fetching chat! Waiting 1 hour...")
-                        time.sleep(3600)
-                        break
+                    err = data["error"]
+                    reason = err.get("errors", [{}])[0].get("reason", "")
+                    if err.get("code") == 403 and "quotaExceeded" in reason:
+                        print("⚠️ [YouTube] Quota exceeded for current key, rotating...")
+                        rotate_key()
+                        time.sleep(5)
+                        continue
                     else:
-                        print(f"⚠️ [YouTube] API Error: {message}, retrying in 30s...")
+                        print("⚠️ [YouTube] API error:", err)
                         time.sleep(30)
                         continue
 
@@ -326,7 +328,7 @@ def listen_youtube():
                     msg_id = item["id"]
                     user = item["authorDetails"]["displayName"]
                     msg = item["snippet"]["displayMessage"]
-                    if msg_id in yt_sent_messages:
+                    if msg_id in yt_sent_messages or yt_last_message_by_user.get(user) == msg:
                         continue
                     yt_sent_messages.add(msg_id)
                     yt_last_message_by_user[user] = msg
@@ -339,7 +341,9 @@ def listen_youtube():
                 time.sleep(interval)
 
         except Exception as e:
-            print("⚠️ [YouTube] Unexpected error, retrying in 30s...", e)
+            print("⚠️ [YouTube] Error, retrying in 30s...", e)
+            yt_sent_messages = set()
+            yt_last_message_by_user = {}
             time.sleep(30)
 
 
