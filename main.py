@@ -58,7 +58,7 @@ yt_sent_messages = set()
 import time
 import requests
 
-MAX_SHORT_MSG_LEN = 105  # new max for short messages
+MAX_SHORT_MSG_LEN = 105  # short message limit
 
 def clean_single_line(msg: str) -> str:
     """Force message into a single line and prevent ntfy from wrapping long words"""
@@ -104,7 +104,7 @@ def ntfy_worker():
             body = f"{user}: {clean_msg}"
 
             if len(body) <= MAX_SHORT_MSG_LEN:
-                # Short message → send as-is, no [1/1]
+                # Short message → send as-is
                 requests.post(
                     f"https://ntfy.sh/{NTFY_TOPIC}",
                     data=body.encode("utf-8"),
@@ -115,7 +115,11 @@ def ntfy_worker():
                 # Long message → split into parts
                 parts = split_message(body, 2000)
                 for i, part in enumerate(parts, 1):
-                    part_title = f"{title} [{i}/{len(parts)}]"  # show only for >1 part
+                    # Only show [i/n] if more than 1 part
+                    if len(parts) > 1:
+                        part_title = f"{title} [{i}/{len(parts)}]"
+                    else:
+                        part_title = title
                     requests.post(
                         f"https://ntfy.sh/{NTFY_TOPIC}",
                         data=part.encode("utf-8"),
@@ -130,6 +134,7 @@ def ntfy_worker():
         except Exception as e:
             print("⚠️ Failed to send NTFY:", e)
         ntfy_queue.task_done()
+
 
 # -----------------------------
 # --- Facebook Section ---
