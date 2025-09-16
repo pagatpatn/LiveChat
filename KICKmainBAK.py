@@ -17,23 +17,6 @@ if not KICK_CHANNEL:
 
 kick_api = KickAPI()
 
-# --- Emoji Mapping ---
-EMOJI_MAP = {
-    "GiftedYAY": "🎉",
-    "ErectDance": "💃",
-    # Add more emojis if needed
-}
-
-emoji_pattern = r"\[emote:(\d+):([^\]]+)\]"
-
-def extract_emoji(text: str) -> str:
-    """Extract and replace Kick emote codes with mapped emojis."""
-    matches = re.findall(emoji_pattern, text)
-    for match in matches:
-        emote_id, emote_name = match
-        emoji_char = EMOJI_MAP.get(emote_name, f"[{emote_name}]")
-        text = text.replace(f"[emote:{emote_id}:{emote_name}]", emoji_char)
-    return text
 
 def send_ntfy(user: str, msg: str):
     """Send chat message notifications to NTFY."""
