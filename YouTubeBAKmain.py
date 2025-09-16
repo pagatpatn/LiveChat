@@ -1,11 +1,12 @@
 import time
 import requests
+import os
 
 
 # 🔑 Your details
-YOUTUBE_API_KEY = "AIzaSyDjlucGgyKo4XE4txwrP-t0maxxRvaoWBI"
-YOUTUBE_CHANNEL_ID = "UCyIbUTzFN8fNmxRo4aG2rCg"
-NTFY_TOPIC = "https://ntfy.sh/streamchats123"  # replace with your topic
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
+YOUTUBE_CHANNEL_ID = os.getenv("YOUTUBE_CHANNEL_ID")
+NTFY_TOPIC = os.getenv("NTFY_TOPIC")  # replace with your topic
 NTFY_DELAY = 2  # seconds between notifications to prevent spam
 
 # Keep track of message IDs to avoid duplicates
